@@ -1,0 +1,26 @@
+[
+  {
+    "last_updated": 1787361650,
+    "legal": "API Terms of Service: Please link back (with follow, and without nofollow!) to the URL on Remote OK and mention Remote OK as a source, so we get traffic back from your site. If you do not we'll have to suspend API access."
+  },
+  {
+    "id": 1001,
+    "date": "2025-10-06T09:00:00Z",
+    "position": "Senior Rust Engineer",
+    "company": "Acme Cloud",
+    "location": "Worldwide",
+    "tags": ["rust", "backend"],
+    "url": "https://remoteok.com/remote-jobs/1001",
+    "description": "<p>Work on distributed systems. <b>Rust</b>, gRPC, Kubernetes.</p>"
+  },
+  {
+    "id": 1002,
+    "date": "2025-10-07T09:00:00Z",
+    "position": "Technical Writer",
+    "company": "Docs Co",
+    "location": "Europe",
+    "tags": ["writing"],
+    "url": "https://remoteok.com/remote-jobs/1002",
+    "description": "Document developer APIs."
+  }
+]

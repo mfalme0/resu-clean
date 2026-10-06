@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>resu-clean</title>
+    <!-- No external fonts, no CDN, no analytics: this app works fully offline. -->
+    <style>
+      html {
+        background: #f9f9f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: #141414;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>
+      <p style="font-family: Georgia, serif; max-width: 60ch; margin: 48px auto; padding: 0 16px">
+        resu-clean is a local web app and needs JavaScript. The REST API works without it:
+        start with <span style="font-family: Consolas, monospace">GET /api/health</span>.
+      </p>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

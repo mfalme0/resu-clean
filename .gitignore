@@ -1,0 +1,38 @@
+# secrets
+.env
+*.local
+
+# data (db, generated documents, uploads)
+data/
+data-*/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# .NET
+[Bb]in/
+[Oo]bj/
+server/publish/
+artifacts/
+*.user
+
+# node
+node_modules/
+web/node_modules/
+web/dist/
+.npm/
+
+# build output: the SPA is generated into the backend's wwwroot by `npm run build`
+server/wwwroot/
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# test output
+TestResults/
+coverage/

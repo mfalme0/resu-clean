@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Deliberately malformed: an unescaped ampersand, to prove the lenient feed reader path works. -->
+<rss version="2.0">
+  <channel>
+    <title>Broken & Feed</title>
+    <link>https://broken.example</link>
+    <description>Has an unescaped ampersand in the title, so strict XML parsing fails</description>
+    <item>
+      <title>Business Analyst &amp; Reporting Lead</title>
+      <link>https://broken.example/jobs/analyst-lead</link>
+      <description>Location: Nairobi, Kenya. Company: Acme Holdings. <b>HTML tags</b> in the body.</description>
+      <pubDate>Mon, 06 Oct 2025 09:00:00 +0000</pubDate>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,21 @@
+{
+  "name": "resu-clean",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted resume toolkit: clean, ATS-scan, tailor, job search, application kits.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "test": "node scripts/test.mjs",
+    "smoke": "node scripts/smoke-api.mjs",
+    "mem": "node scripts/mem.mjs",
+    "mem:measure": "node scripts/measure-memory.mjs",
+    "publish": "node scripts/publish.mjs"
+  }
+}

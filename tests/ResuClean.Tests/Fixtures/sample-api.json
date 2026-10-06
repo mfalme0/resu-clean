@@ -1,0 +1,23 @@
+{
+  "count": 2,
+  "results": [
+    {
+      "id": "r-1001",
+      "title": "Data Analyst",
+      "organization": { "name": "Acme Analytics" },
+      "location": { "name": "Nairobi, Kenya" },
+      "url_alias": "https://api.example.org/v1/jobs/r-1001",
+      "date": { "created": "2025-10-06T09:00:00Z" },
+      "body": "Reports to the Head of Data. Uses SQL and Power BI daily. Hybrid, two days on site."
+    },
+    {
+      "id": "r-1002",
+      "title": "Monitoring Engineer",
+      "organization": { "name": "Coastal Cloud" },
+      "location": { "name": "Mombasa, Kenya" },
+      "url_alias": "https://api.example.org/v1/jobs/r-1002",
+      "date": { "created": "2025-10-07T09:00:00Z" },
+      "body": "Remote within East Africa. Kubernetes and Terraform experience required."
+    }
+  ]
+}
