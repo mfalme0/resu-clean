@@ -91,6 +91,11 @@ public static class ModelEndpoints
             Api.Guard(() => Task.FromResult(Api.Ok(router.SetRoute(workflow, body)))));
 
         routes.MapPost("/{workflow}/preview", (string workflow, SetRouteRequest body, ModelRouter router, CancellationToken ct) =>
-            Api.Guard(async () => Api.Ok(await router.PreviewAsync(workflow, body.Entries.FirstOrDefault()?.Model ?? "", ct).ConfigureAwait(false))));
+            Api.Guard(async () =>
+            {
+                // Test whatever the user typed, whether or not the route has been saved yet.
+                var entry = body.Entries.FirstOrDefault();
+                return Api.Ok(await router.PreviewAsync(workflow, entry?.ProviderId, entry?.Model, ct).ConfigureAwait(false));
+            }));
     }
 }

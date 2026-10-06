@@ -105,8 +105,11 @@ public static class ProviderPresets
             Keyless: false,
             KeyHint: "cc_...",
             DocsUrl: "https://cleanapis.com/docs/getting-started",
-            Notes: "Aggregator with one OpenAI-compatible endpoint across many vendors. Keys need the models:read scope for the model list to work.",
-            SuggestedModels: new[] { "claude-opus-4.8", "gpt-4o-mini" }),
+            Notes: "Aggregator with one OpenAI-compatible endpoint across many vendors. Keys need the models:read scope for the model list to work. Which models you can call depends on the plan behind your key: an id from /v1/models can still return model_not_found.",
+            // Verified against a live key on 2026-02-14. gpt-4o-mini was removed from this list
+            // after it came back model_not_found, so the aggregator list is not OpenAI's list.
+            // Press "Fetch models from the provider" for the ids your own key can actually call.
+            SuggestedModels: new[] { "claude-opus-4.8", "gpt-5.6-luna", "deepseek-v4-flash-0731" }),
 
         new(
             Id: "ollama",

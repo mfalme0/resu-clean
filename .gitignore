@@ -15,6 +15,7 @@ data-*/
 [Oo]bj/
 server/publish/
 artifacts/
+artifacts-*/
 *.user
 
 # node

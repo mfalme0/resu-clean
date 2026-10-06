@@ -19,9 +19,11 @@ the tool produces files, you press send.
 
 ## Contents
 
+- [Quick start](#quick-start)
 - [Requirements](#requirements)
-- [Setup](#setup)
 - [The three run modes](#the-three-run-modes)
+- [The downloadable app](#the-downloadable-app)
+- [Where your data and API keys live](#where-your-data-and-api-keys-live)
 - [Memory](#memory)
 - [Works with no model](#works-with-no-model)
 - [Adding a source](#adding-a-source)
@@ -34,6 +36,20 @@ the tool produces files, you press send.
 - [What's left for v2](#whats-left-for-v2)
 
 ---
+
+## Quick start
+
+**Just want to use it?** Download the zip for your platform from
+[the releases page](https://github.com/mfalme0/resu-clean/releases), unzip it, and run the binary.
+No .NET, no Node, no install. Details in [The downloadable app](#the-downloadable-app).
+
+**Working on it?**
+
+```bash
+npm install && cd web && npm install && cd ..
+npm run build     # once: builds the UI and the backend
+npm start         # http://127.0.0.1:5177
+```
 
 ## Requirements
 
@@ -90,17 +106,102 @@ npm run build    # once
 npm start
 ```
 
-### `npm run publish` — a single self-contained executable
+### `npm run publish` — a single self-contained app
 
-Publishes a framework-dependent-free build into `artifacts/resu-clean-<rid>/`. Copy that folder
-anywhere and run the `ResuClean` executable — **the target machine does not need .NET installed**.
+Publishes a self-contained build into `artifacts/resu-clean-<rid>/` with two launchers in it.
+**The target machine does not need .NET or Node installed.** See
+[the downloadable app](#the-downloadable-app) for how to use it.
 
 ```bash
-npm run publish
+npm run publish                 # for this machine
+npm run publish -- --all-rids   # complete bundles for win-x64, osx-x64 and linux-x64
+npm run release:zips            # → artifacts/resu-clean-<rid>.zip, ready to attach to a release
 # → artifacts/resu-clean-win-x64/
 ```
 
+`release:zips` is the one that guards a public download: it refuses to build if a database or a
+`.env` is still in the bundle, refuses if `Data/Schema.sql` went missing, and fails on any
+key-shaped string in a text file.
+
 Useful for a USB stick, or running it on a machine you do not want to install anything on.
+
+## The downloadable app
+
+For people who just want to use it: **[releases page](https://github.com/mfalme0/resu-clean/releases)**.
+Download the zip for your platform, unzip it, and run the binary.
+
+| Platform | Binary | Zip in the release |
+|---|---|---|
+| Windows x64 | `resu-clean.exe` | `resu-clean-win-x64.zip` |
+| macOS (Intel or Apple silicon under Rosetta) | `resu-clean` | `resu-clean-osx-x64.zip` |
+| Linux x64 | `resu-clean` | `resu-clean-linux-x64.zip` |
+
+x64 only, and that is deliberate: three platforms we can verify from one machine. ARM64 is a
+one-line change to the `RIDS` array in `scripts/publish.mjs` plus a test run on the hardware, so it
+was left out rather than shipped untested.
+
+Each zip is a **complete folder**: the app, the launcher, `wwwroot`, and a `Data/` folder that starts
+out holding `Schema.sql` and becomes your database on first run. Copy the folder to a USB stick or a
+second machine and it runs as-is.
+
+```
+resu-clean-linux-x64/
+├── resu-clean          ← run this
+├── resu-clean-dev      ← run this for the two-process dev mode (needs the repo)
+├── ResuClean           the self-contained backend
+├── wwwroot/            the built UI
+└── data/               YOUR DATABASE AND API KEYS live here
+```
+
+**Windows:** double-click `resu-clean.exe`, or run `resu-clean help`.
+**macOS / Linux:** `./resu-clean` in a terminal. If macOS blocks it the first time, right-click →
+Open, or run `chmod +x resu-clean`.
+
+The launcher opens your browser automatically once the server is up. Ctrl+C, or closing the window,
+stops it cleanly.
+
+## Where your data and API keys live
+
+One folder, shown at startup so you never have to guess:
+
+```
+resu-clean  mode: run
+  app:  /home/you/resu-clean-linux-x64/
+  starting on http://127.0.0.1:5177  (UI and API on the same port)
+  data: /home/you/resu-clean-linux-x64/data   <- database and stored API keys live here
+  press Ctrl+C to stop
+```
+
+- **Published app:** `<app folder>/data`. It travels with the app, so the whole thing stays portable.
+  In the zip that folder is called `Data/` and ships holding `Schema.sql`; it becomes your database on
+  first run. On Windows and macOS the filesystem ignores the case, so `Data` and `data` are the same
+  folder and your database files sit next to `Schema.sql`. That is intentional.
+- **From source (`npm start` / `npm run dev`):** `<repo>/data`.
+- **Force one location for both** by setting an absolute `RESUCLEAN_DATA_DIR`. This is worth doing
+  if you switch between the release and the source tree, so you always see the same providers and keys.
+
+### Do I have to re-enter API keys?
+
+**No — enter each one once.** Keys are encrypted and stored in the database in that `data` folder,
+and they survive restarts, upgrades and edits:
+
+- Saving a provider again **without** a key keeps the stored one.
+- Disabling a provider, or editing its models or routes, does not touch the key.
+- Restarting the app does not lose it. (Verified: save a key, kill the process, restart, and the
+  provider still reports `hasKey: true` from `stored`.)
+- The only way to lose one is to delete the provider, or delete/lose the `data` folder.
+
+Three caveats worth knowing:
+
+1. **On Windows, keys are encrypted with DPAPI for your Windows user account.** Copy the `data`
+   folder to a *different* Windows account or machine and those stored keys become unreadable — you
+   would re-enter them. (On macOS and Linux the key file is `data/machine.key`; keep it with the
+   database or the same applies.)
+2. **Using an environment variable instead stores nothing.** Put the key in `.env` as
+   `GROQ_API_KEY=...` and it is read from the environment at call time — nothing is written to the
+   database at all, so it can never leak into a backup of `data/`.
+3. **Back up the whole `data` folder**, not just the `.db` file. That is what holds your resumes,
+   verified profile facts, saved jobs, kits and encrypted keys.
 
 ## Memory
 
@@ -240,6 +341,30 @@ Models → *Add a provider* → pick a **preset**. Nine are built in:
 | NVIDIA NIM | openai | `https://integrate.api.nvidia.com/v1` |
 | Clean APIs | openai | `https://cleanapis.com/v1` |
 | Ollama (local) | openai | `http://127.0.0.1:11434/v1` |
+
+### Choosing which models do what
+
+You never type a model id by hand. Add a provider, press **Fetch models from the provider**, save it,
+then press **Refresh**. The provider list and every route dropdown pick up the new models.
+
+Each of the six workflows (`clean`, `ats`, `profile`, `update_resume`, `find_jobs`, `apply_email`)
+gets its own card:
+
+- **Provider** and **Model** are dropdowns, fed by what the provider actually reports, so a typo is
+  not something you can get wrong.
+- **+ Add model** adds as many rows as you want. One row is fine; three fallbacks is normal.
+- **↑ ↓** change the order they are tried in. **×** removes a row.
+- **Test** makes one real call to that exact provider and model pair, saved or not, and reports what
+  came back. Delete a provider while a route still points at it and you get a sentence saying so,
+  not a stack trace.
+
+One row per workflow is not "one winner". The router tries row 1; on a wrong key, an unknown model or
+any provider error it falls through to row 2 and says why. With no working row, the workflow returns
+its deterministic result, so a provider outage never blocks your job search.
+
+> Aggregators are not OpenAI. A model id listed by `GET /v1/models` can still come back
+> `model_not_found`, because your key's plan decides what you may call. The Clean APIs preset only
+> suggests ids I confirmed against a live key; **Fetch models** is always the authority for your key.
 | LM Studio (local) | openai | `http://127.0.0.1:1234/v1` |
 
 Selecting one fills in the type, base URL, environment variable and a link to where you get a key.
@@ -379,6 +504,12 @@ rendered from it. If the source has odd spacing, clean it first.
 low-RAM mode.
 
 ## What's left for v2
+
+> **Want to help?** The one gap I could not close from this machine is **ARM64 support**. The
+> prebuilt downloads are x64 only (Windows, macOS, Linux). Making it work on Apple silicon, Windows
+> on ARM, and ARM Linux servers is a genuinely useful contribution, and it is a small change: add the
+> RID to `RIDS` in `scripts/publish.mjs`, confirm the app runs on the hardware, and report what
+> breaks. I left it out rather than ship binaries I could not test. Open an issue or a PR.
 
 - Cover letter and email tone as first-class, per-company preferences rather than one global note
 - Interview prep: questions generated from a job description, grounded in your profile

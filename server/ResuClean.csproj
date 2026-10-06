@@ -40,9 +40,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="Data\Schema.sql" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="Seeds\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Schema.sql MUST ship: Db reads it from the app directory at startup. Without
+         CopyToPublishDirectory the released app starts and then throws on every request that
+         touches the database, because the file is in bin/ but not in the publish output. -->
+    <None Update="Data\Schema.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="Seeds\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

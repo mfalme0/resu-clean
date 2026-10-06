@@ -24,7 +24,7 @@ public sealed class AppConfig
     public static AppConfig Load(IConfiguration cfg, string contentRoot)
     {
         var dataDir = cfg["RESUCLEAN_DATA_DIR"] ?? "data";
-        if (!Path.IsPathRooted(dataDir)) dataDir = Path.Combine(contentRoot, "..", dataDir);
+        if (!Path.IsPathRooted(dataDir)) dataDir = Path.Combine(AppRootOf(contentRoot), dataDir);
         return new AppConfig
         {
             Port = ParseInt(cfg["RESUCLEAN_PORT"], 5177),
@@ -39,6 +39,31 @@ public sealed class AppConfig
             UserAgent = cfg["RESUCLEAN_USER_AGENT"] ?? "resu-clean/1.0 (self-hosted resume toolkit)",
             DataDir = Path.GetFullPath(dataDir)
         };
+    }
+
+    /// <summary>
+    /// The folder that holds the application, so the data directory lands in the right place in
+    /// both layouts.
+    ///
+    /// Published bundle (npm run publish): the content root IS the app root, and it contains
+    /// wwwroot. Data goes to &lt;bundle&gt;/data so the whole thing stays portable: copy the folder
+    /// to a USB stick and the database travels with it.
+    ///
+    /// Source tree (dotnet run from server/): the content root is &lt;repo&gt;/server, so the app root
+    /// is its parent and data goes to &lt;repo&gt;/data.
+    ///
+    /// Getting this wrong means two launch modes silently use two different databases, which is
+    /// exactly how stored API keys go missing. Pinned by tests.
+    /// </summary>
+    public static string AppRootOf(string contentRoot)
+    {
+        var root = Path.GetFullPath(contentRoot);
+        if (Directory.Exists(Path.Combine(root, "wwwroot"))) return root;
+
+        var parent = Directory.GetParent(root);
+        if (parent is not null) return parent.FullName;
+
+        return root;
     }
 
     private static int ParseInt(string? raw, int fallback) =>

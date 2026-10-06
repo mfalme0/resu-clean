@@ -16,6 +16,8 @@
     "smoke": "node scripts/smoke-api.mjs",
     "mem": "node scripts/mem.mjs",
     "mem:measure": "node scripts/measure-memory.mjs",
-    "publish": "node scripts/publish.mjs"
+    "publish": "node scripts/publish.mjs",
+    "exe": "dotnet publish tools/launcher/ResuClean.Launcher.csproj -c Release -o artifacts/launcher --nologo",
+    "release:zips": "node scripts/package-release.mjs"
   }
 }

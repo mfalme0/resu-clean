@@ -16,11 +16,14 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
     apply_email: 'Writing the application email. Falls back to the template email.'
   };
 
+  const WORKFLOWS = Object.keys(WORKFLOW_NOTES);
+
   let providers: Provider[] = [];
   let routes: Route[] = [];
   let presets: ProviderPreset[] = [];
   let busy = new Set<string>();
   let testMessage: Record<string, string> = {};
+  let refreshing = false;
 
   // Provider editor
   let editing: (Partial<Provider> & { apiKey?: string; presetId?: string }) | null = null;
@@ -32,11 +35,17 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
   let pickedModels: string[] = [];
   let modelFilter = '';
 
-  // Route editor: workflow -> "providerId::model" strings, one per line
-  let routeDraft: Record<string, string> = {};
+  // Route editor: workflow -> ordered list of chosen models. Structured rather than free text, so
+  // the provider and model always come from real dropdowns and cannot be typed wrong.
+  type RouteEntryDraft = { providerId: string; model: string };
+  let routeDraft: Record<string, RouteEntryDraft[]> = {};
+  // Test results are keyed per entry, not per workflow: "live test" now targets one chosen model.
+  let routeTest: Record<string, string> = {};
+  let routeBusy: Record<string, boolean> = {};
 
   onMount(load);
 
+  /** Re-reads providers, routes and presets. Called after anything that changes them. */
   async function load() {
     try {
       [providers, routes, presets] = await Promise.all([
@@ -44,15 +53,70 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
         api.get<Route[]>('/routes'),
         api.get<ProviderPreset[]>('/providers/presets')
       ]);
-      const draft: Record<string, string> = {};
+      const draft: Record<string, RouteEntryDraft[]> = {};
       for (const route of routes) {
-        draft[route.workflow] = route.entries.map((e) => `${e.providerId}::${e.model}`).join('\n');
+        draft[route.workflow] = route.entries.map((e) => ({ providerId: e.providerId, model: e.model }));
+      }
+      // Every workflow always gets a list, even when no route row exists yet, so the picker shows.
+      for (const workflow of WORKFLOWS) {
+        if (!draft[workflow]) draft[workflow] = [];
       }
       routeDraft = draft;
+      routeTest = {};
       await refreshMemory();
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), 'error');
     }
+  }
+
+  /** Explicit refresh, for when keys or models were changed outside this page. */
+  async function refreshAll() {
+    refreshing = true;
+    await load();
+    await loadSystem();
+    refreshing = false;
+    flash('Refreshed. Providers and models are up to date.');
+  }
+
+  function modelsFor(providerId: string): string[] {
+    return providers.find((p) => p.id === providerId)?.models ?? [];
+  }
+
+  function setEntry(workflow: string, index: number, patch: Partial<RouteEntryDraft>) {
+    const list = [...(routeDraft[workflow] ?? [])];
+    const current = list[index];
+    if (!current) return;
+    list[index] = { ...current, ...patch };
+    routeDraft = { ...routeDraft, [workflow]: list };
+  }
+
+  /** Changing provider pre-selects that provider's first model, since the old one will not fit. */
+  function setProvider(workflow: string, index: number, providerId: string) {
+    const available = modelsFor(providerId);
+    setEntry(workflow, index, { providerId, model: available[0] ?? '' });
+  }
+
+  function addEntry(workflow: string) {
+    const firstWithModels = providers.find((p) => p.models.length > 0) ?? providers[0];
+    const list = [...(routeDraft[workflow] ?? [])];
+    list.push({ providerId: firstWithModels?.id ?? '', model: firstWithModels?.models[0] ?? '' });
+    routeDraft = { ...routeDraft, [workflow]: list };
+  }
+
+  function removeEntry(workflow: string, index: number) {
+    const list = [...(routeDraft[workflow] ?? [])];
+    list.splice(index, 1);
+    routeDraft = { ...routeDraft, [workflow]: list };
+  }
+
+  /** Fallbacks are tried in order, so moving a row changes real behaviour. */
+  function moveEntry(workflow: string, index: number, delta: number) {
+    const list = [...(routeDraft[workflow] ?? [])];
+    const target = index + delta;
+    if (target < 0 || target >= list.length) return;
+    const [row] = list.splice(index, 1);
+    list.splice(target, 0, row);
+    routeDraft = { ...routeDraft, [workflow]: list };
   }
 
   function startNew() {
@@ -204,31 +268,40 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
   }
 
   async function saveRoute(workflow: string) {
-    const lines = routeDraft[workflow]?.split('\n').map((l) => l.trim()).filter(Boolean) ?? [];
-    const entries = lines.map((line) => {
-      const [providerId, ...rest] = line.split('::');
-      return { providerId: (providerId ?? '').trim(), model: rest.join('::').trim() };
-    }).filter((e) => e.providerId && e.model);
+    const entries = (routeDraft[workflow] ?? []).filter((e) => e.providerId && e.model);
+    const skipped = (routeDraft[workflow] ?? []).length - entries.length;
 
     try {
       await api.put(`/routes/${workflow}`, { entries });
       await load();
       await loadSystem();
-      flash(`Route for "${workflow}" saved. ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}.`);
+      flash(
+        `Route for "${workflow}" saved: ${entries.length} model${entries.length === 1 ? '' : 's'} in order.` +
+          (skipped > 0 ? ` ${skipped} incomplete row${skipped === 1 ? '' : 's'} skipped.` : '')
+      );
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), 'error');
     }
   }
 
-  async function previewRoute(workflow: string) {
-    const first = routeDraft[workflow]?.split('\n')[0]?.split('::')[1]?.trim() ?? '';
+  /** Live-tests one chosen provider+model pair, saved or not. */
+  async function previewEntry(workflow: string, index: number) {
+    const key = `${workflow}:${index}`;
+    const entry = routeDraft[workflow]?.[index];
+    if (!entry?.providerId || !entry?.model) {
+      routeTest = { ...routeTest, [key]: 'Choose both a provider and a model first.' };
+      return;
+    }
+    routeBusy = { ...routeBusy, [key]: true };
     try {
       const result = await api.post<{ ok: boolean; message: string }>(`/routes/${workflow}/preview`, {
-        entries: [{ providerId: routeDraft[workflow]?.split('\n')[0]?.split('::')[0] ?? '', model: first }]
+        entries: [{ providerId: entry.providerId, model: entry.model }]
       });
-      testMessage[workflow] = result.message;
+      routeTest = { ...routeTest, [key]: result.message };
     } catch (err) {
-      testMessage[workflow] = err instanceof Error ? err.message : String(err);
+      routeTest = { ...routeTest, [key]: err instanceof Error ? err.message : String(err) };
+    } finally {
+      routeBusy = { ...routeBusy, [key]: false };
     }
   }
 
@@ -236,6 +309,10 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
 
   function selectValue(event: Event): string {
     return (event.currentTarget as HTMLSelectElement).value;
+  }
+
+  function inputValue(event: Event): string {
+    return (event.currentTarget as HTMLInputElement).value;
   }
 </script>
 
@@ -254,7 +331,15 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
 <div class="ornament" aria-hidden="true">&#x2727; &#x2727; &#x2727;</div>
 
 <section class="block">
-  <Rule text="Providers" note="{providers.length} configured" />
+  <div class="label-row">
+    <span class="label">Providers</span>
+    <div class="actions">
+      <button type="button" class="btn btn-sm" on:click={refreshAll} disabled={refreshing}>
+        {refreshing ? 'Refreshing…' : 'Refresh'}
+      </button>
+      <button type="button" class="btn btn-primary btn-sm" on:click={startNew}>Add a provider</button>
+    </div>
+  </div>
 
   {#if providers.length === 0}
     <Empty
@@ -315,6 +400,11 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
 
     <button type="button" class="btn" style="margin-top: var(--s4)" on:click={startNew}>Add a provider</button>
   {/if}
+
+  <p class="meta" style="margin-top: var(--s3)">
+    {providers.length} configured. After you add a key or fetch models, press Refresh (or just save the
+    provider) and the route dropdowns below pick up the new models.
+  </p>
 </section>
 
 {#if editing}
@@ -436,13 +526,13 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
     <Rule text="How routing works" />
 
     <div class="steps">
-      {#each (routes.length ? routes.map((r) => r.workflow) : ['clean', 'ats', 'update_resume', 'apply_email']) as workflow, index (workflow)}
+      {#each WORKFLOWS as workflow, index (workflow)}
         <div class="step">
           <span class="step-number">{String(index + 1).padStart(2, '0')}</span>
           <h3 class="step-title">{workflow}</h3>
-          <p class="step-body">{WORKFLOW_NOTES[workflow] ?? 'Optional model assistance for this workflow.'}</p>
+          <p class="step-body">{WORKFLOW_NOTES[workflow]}</p>
           <p class="step-meta">
-            {routes.find((r) => r.workflow === workflow)?.entries.length ?? 0} route entries &middot;
+            {(routeDraft[workflow] ?? []).length} model{(routeDraft[workflow] ?? []).length === 1 ? '' : 's'} chosen &middot;
             active: {routes.find((r) => r.workflow === workflow)?.activeModel ?? 'none'}
           </p>
         </div>
@@ -458,41 +548,140 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
 </section>
 
 <section class="block">
-  <Rule text="Routes" note="one entry per line: provider::model" />
+  <Rule text="Routes" note="choose the models, in the order they should be tried" />
 
-  <div class="grid-rule route-grid">
-    {#each routes as route (route.workflow)}
-      <div class="cell route-cell">
-        <div class="route-head">
-          <h3 class="card-title">{route.workflow}</h3>
-          {#if route.activeModel}
-            <span class="badge badge-pass">via {route.activeModel}</span>
+  {#if providers.length === 0}
+    <Notice
+      tone="info"
+      title="No providers yet, so there is nothing to route to"
+      message="Add a provider and fetch its models above. Each workflow then gets a dropdown of those models."
+      hint="Every workflow still works without a model, so this is optional."
+    />
+  {:else}
+    <div class="grid-rule route-grid">
+      {#each WORKFLOWS as workflow (workflow)}
+        {@const entries = routeDraft[workflow] ?? []}
+        {@const saved = routes.find((r) => r.workflow === workflow)}
+        <div class="cell route-cell">
+          <div class="route-head">
+            <h3 class="card-title">{workflow}</h3>
+            {#if saved?.activeModel}
+              <span class="badge badge-pass">via {saved.activeModel}</span>
+            {:else}
+              <span class="badge badge-accent">no active model</span>
+            {/if}
+          </div>
+
+          <p class="meta route-note">{WORKFLOW_NOTES[workflow]}</p>
+
+          {#if entries.length === 0}
+            <p class="meta">No models chosen. This workflow uses its deterministic result.</p>
           {:else}
-            <span class="badge badge-accent">no active model</span>
+            <ol class="route-entries">
+              {#each entries as entry, index (index)}
+                {@const key = `${workflow}:${index}`}
+                <li class="route-entry">
+                  <div class="route-line">
+                    <span class="route-pos" title="Fallback order">{index + 1}</span>
+
+                    <div class="field route-field">
+                      <label class="sr-only" for={`${key}-provider`}>Provider for {workflow}, position {index + 1}</label>
+                      <select
+                        id={`${key}-provider`}
+                        class="select"
+                        value={entry.providerId}
+                        on:change={(e) => setProvider(workflow, index, selectValue(e))}
+                      >
+                        <option value="">Choose a provider…</option>
+                        {#each providers as p (p.id)}
+                          <option value={p.id}>{p.name}{p.hasKey ? '' : ' (no key)'}</option>
+                        {/each}
+                      </select>
+                    </div>
+
+                    <div class="field route-field">
+                      <label class="sr-only" for={`${key}-model`}>Model for {workflow}, position {index + 1}</label>
+                      {#if modelsFor(entry.providerId).length > 0}
+                        <select
+                          id={`${key}-model`}
+                          class="select mono-select"
+                          value={entry.model}
+                          on:change={(e) => setEntry(workflow, index, { model: selectValue(e) })}
+                        >
+                          <option value="">Choose a model…</option>
+                          {#each modelsFor(entry.providerId) as model (model)}
+                            <option value={model}>{model}</option>
+                          {/each}
+                        </select>
+                      {:else}
+                        <input
+                          id={`${key}-model`}
+                          class="input mono-select"
+                          value={entry.model}
+                          on:input={(e) => setEntry(workflow, index, { model: inputValue(e) })}
+                          placeholder="No models listed. Fetch them above, or type the id."
+                        />
+                      {/if}
+                    </div>
+
+                    <div class="route-tools">
+                      <button
+                        type="button"
+                        class="btn btn-inverted btn-sm"
+                        on:click={() => previewEntry(workflow, index)}
+                        disabled={routeBusy[key]}
+                        title="Make one real call to this provider and model"
+                      >
+                        {routeBusy[key] ? 'Testing…' : 'Test'}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-inverted btn-sm"
+                        on:click={() => moveEntry(workflow, index, -1)}
+                        disabled={index === 0}
+                        aria-label={`Move ${entry.model || 'model'} up`}
+                      >↑</button>
+                      <button
+                        type="button"
+                        class="btn btn-inverted btn-sm"
+                        on:click={() => moveEntry(workflow, index, 1)}
+                        disabled={index === entries.length - 1}
+                        aria-label={`Move ${entry.model || 'model'} down`}
+                      >↓</button>
+                      <button
+                        type="button"
+                        class="btn btn-inverted btn-sm"
+                        on:click={() => removeEntry(workflow, index)}
+                        aria-label={`Remove ${entry.model || 'model'}`}
+                      >×</button>
+                    </div>
+                  </div>
+
+                  {#if routeTest[key]}
+                    <p class="meta route-result">{routeTest[key]}</p>
+                  {/if}
+                </li>
+              {/each}
+            </ol>
           {/if}
+
+          <div class="route-actions">
+            <button type="button" class="btn btn-sm" on:click={() => addEntry(workflow)}>
+              + Add model
+            </button>
+            <button type="button" class="btn btn-primary btn-sm" on:click={() => saveRoute(workflow)}>
+              Save {workflow.replace('_', ' ')}
+            </button>
+          </div>
         </div>
+      {/each}
+    </div>
 
-        <label class="label" for={`route-${route.workflow}`}>Fallback order</label>
-        <textarea
-          id={`route-${route.workflow}`}
-          class="textarea mono-input"
-          bind:value={routeDraft[route.workflow]}
-          placeholder="prv_abc::model-one"
-        ></textarea>
-
-        <p class="meta">Paste the provider id from the table above, then ::, then the model name.</p>
-
-        <div class="route-actions">
-          <button type="button" class="btn btn-inverted btn-sm" on:click={() => saveRoute(route.workflow)}>Save</button>
-          <button type="button" class="btn inverted-btn btn-sm" on:click={() => previewRoute(route.workflow)}>Live test</button>
-        </div>
-
-        {#if testMessage[route.workflow]}
-          <p class="meta">{testMessage[route.workflow]}</p>
-        {/if}
-      </div>
-    {/each}
-  </div>
+    <p class="meta" style="margin-top: var(--s4)">
+      Add as many rows as you like. The first one is tried first; if it fails the router falls through to the
+      next and tells you why. Save each workflow after changing it.
+    </p>
+  {/if}
 </section>
 
 <section class="block">
@@ -735,11 +924,84 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
   }
 
   .route-grid {
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
   }
 
   .route-cell {
     padding: var(--s5);
+  }
+
+  .route-note {
+    margin: 0 0 var(--s4);
+  }
+
+  /* Ordered list of chosen models: number, provider, model, then the row tools. */
+  .route-entries {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--s4);
+    display: grid;
+    gap: var(--s3);
+  }
+
+  .route-entry {
+    border: var(--hair);
+    border-left: var(--rule-heavy);
+    padding: var(--s3);
+  }
+
+  .route-line {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: var(--s2) var(--s3);
+    align-items: center;
+  }
+
+  .route-pos {
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-align: center;
+  }
+
+  .route-field {
+    min-width: 0;
+  }
+
+  .mono-select {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .route-tools {
+    grid-column: 2;
+    display: flex;
+    gap: var(--s2);
+    flex-wrap: wrap;
+  }
+
+  .route-tools .btn {
+    padding: 4px 8px;
+    min-width: 32px;
+  }
+
+  .route-result {
+    margin: var(--s3) 0 0;
+    word-break: break-word;
+  }
+
+  /* Visible to screen readers only, so each dropdown still has a real label. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .route-head {
@@ -768,16 +1030,6 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
   .btn-inverted:hover:not(:disabled) {
     background: transparent;
     color: var(--paper);
-  }
-
-  .inverted-btn {
-    border-color: var(--paper);
-    color: var(--paper);
-  }
-
-  .inverted-btn:hover:not(:disabled) {
-    background: var(--paper);
-    color: var(--ink);
   }
 
   .stats {

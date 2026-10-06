@@ -149,20 +149,49 @@ public sealed class ModelRouter
     public Task<RoutedResult> RunAsync(string workflow, string system, string user, CancellationToken ct) =>
         RunAsync(workflow, system, user, null, ct);
 
-    public async Task<RoutePreviewResponse> PreviewAsync(string workflow, string model, CancellationToken ct = default)
+    /// <summary>
+    /// Makes a real call to test a provider/model pair. The pair comes from the request rather than
+    /// the saved route, so "Live test" also works on an unsaved draft. Matching against saved
+    /// entries made testing a brand new model impossible: it replied "add one in Routes first",
+    /// which is circular when the point of the button is to check the line you just typed.
+    /// </summary>
+    public async Task<RoutePreviewResponse> PreviewAsync(string workflow, string? providerId, string? model, CancellationToken ct = default)
     {
-        var route = GetRoute(workflow);
-        var entry = route.Entries.FirstOrDefault(e => string.IsNullOrWhiteSpace(model) || e.Model == model);
-        if (entry is null)
-            return new RoutePreviewResponse(false, $"No route entry matches model '{model}'. Add one in Routes first.", 0, null);
+        if (!Workflows.Contains(workflow))
+            throw new ArgumentException($"Workflow must be one of: {string.Join(", ", Workflows)}.");
 
-        var provider = _providers.Get(entry.ProviderId);
-        if (provider is null) return new RoutePreviewResponse(false, "That provider no longer exists.", 0, null);
+        // No provider given: fall back to the first saved entry for this workflow.
+        if (string.IsNullOrWhiteSpace(providerId))
+        {
+            var saved = GetRoute(workflow).Entries.FirstOrDefault();
+            providerId = saved?.ProviderId;
+            if (string.IsNullOrWhiteSpace(model)) model = saved?.Model;
+        }
+
+        if (string.IsNullOrWhiteSpace(providerId))
+        {
+            return new RoutePreviewResponse(false,
+                $"Nothing to test for \"{workflow}\" yet. Write a line like prv_abc::model-name above, then press Save or Live test.",
+                0, null);
+        }
+
+        var provider = _providers.Get(providerId);
+        if (provider is null)
+        {
+            // Returned rather than thrown: this is a normal outcome when a provider was deleted
+            // while a route still referenced it, and the UI shows this message verbatim.
+            return new RoutePreviewResponse(false,
+                $"Provider '{providerId}' no longer exists. Press Refresh on the Models page and pick another one.",
+                0, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(model))
+            return new RoutePreviewResponse(false, "No model selected. Write one after the :: in the line above.", 0, null);
 
         var started = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var reply = await _providers.CallAsync(provider, entry.Model,
+            var reply = await _providers.CallAsync(provider, model,
                 "You are a routing preview. Reply with exactly the word OK.", "Reply with exactly the word OK.", ct).ConfigureAwait(false);
             return new RoutePreviewResponse(true, $"Live call succeeded in {started.ElapsedMilliseconds} ms: {reply.Text.Trim()}", started.ElapsedMilliseconds, null);
         }
