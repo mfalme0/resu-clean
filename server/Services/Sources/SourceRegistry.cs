@@ -102,7 +102,7 @@ public sealed class SourceRegistry
     public static string SearchUrlFor(SourceDto source, string? query, string? location)
     {
         var template = source.UrlTemplate ?? source.Url ?? string.Empty;
-        return SourceDetector.Compose(template, query, location);
+        return SourceDetector.Compose(template, query, location, source.RequiresKey);
     }
 
     private static string DeriveName(string? url, string? template)

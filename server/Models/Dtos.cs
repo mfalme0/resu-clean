@@ -73,7 +73,46 @@ public sealed record CleanResult(
     bool UsedModel,
     string? Model,
     IReadOnlyList<CleanChange> Changes,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    /// <summary>How the rewrite was judged, and what the rejected alternative was. Null when no model ran.</summary>
+    RewriteOutcome? Rewrite = null);
+
+/// <summary>
+/// The measured outcome of a model rewrite. The rejected text is carried back rather than discarded,
+/// so a user can overrule the gate after reading why it fired.
+/// </summary>
+public sealed record RewriteOutcome(
+    bool Accepted,
+    int BaselineScore,
+    int CandidateScore,
+    int BaselineMissing,
+    int CandidateMissing,
+    string Reason,
+    /// <summary>Present only when the rewrite was rejected: the text that was not taken.</summary>
+    string? RejectedText = null);
+
+public sealed record RewriteEvaluationDto(
+    string Id,
+    string Workflow,
+    string Model,
+    int BaselineScore,
+    int CandidateScore,
+    int BaselineMissing,
+    int CandidateMissing,
+    bool Accepted,
+    string Reason,
+    string CreatedAt);
+
+public sealed record RewriteLedgerResponse(
+    IReadOnlyList<RewriteLedgerRowDto> Rows,
+    IReadOnlyList<RewriteEvaluationDto> Recent);
+
+public sealed record RewriteLedgerRowDto(
+    string Workflow,
+    string Model,
+    int Total,
+    int Accepted,
+    int AvgDelta);
 
 public sealed record CleanChange(string Kind, string Detail, int Count);
 
@@ -127,9 +166,42 @@ public sealed record UpdateResumeResponse(
     string? Model,
     IReadOnlyList<PendingFactDto> Pending,
     bool BlockedByPending,
-    IReadOnlyList<string> Notes);
+    IReadOnlyList<string> Notes,
+    /// <summary>How the rewrite was judged, and what the rejected alternative was.</summary>
+    RewriteOutcome? Rewrite = null);
 
 public sealed record ExportRequest(string VersionId, string Format);
+
+public sealed record AcceptTextRequest(string Text, string? Label = null);
+
+// ---- Grounding ----------------------------------------------------------
+
+public sealed record FactClaimDto(
+    string Text,
+    string Category,
+    IReadOnlyList<string> FactIds,
+    bool Grounded,
+    string Note);
+
+public sealed record FactCheckReportDto(
+    string VersionId,
+    int Checked,
+    int Grounded,
+    int Ungrounded,
+    IReadOnlyList<FactClaimDto> Claims,
+    bool UsedModel,
+    string? Model,
+    string Method,
+    IReadOnlyList<PendingFactDto> Queued);
+
+public sealed record FactCheckDto(
+    string Id,
+    string VersionId,
+    string Model,
+    string Method,
+    int Checked,
+    int Ungrounded,
+    string CreatedAt);
 
 // ---- Profile ----------------------------------------------------------------
 
@@ -268,7 +340,98 @@ public sealed record JobDto(
     bool Remote,
     bool IsManual,
     string? BestVersionId,
+    string CreatedAt,
+    /// <summary>Blockers in the posting that nothing in your profile covers. 0 when none, or when unchecked.</summary>
+    int UnmetBlockers = 0,
+    int UnmetRequired = 0,
+    /// <summary>False until the posting has been classified. Unchecked is not the same as clear.</summary>
+    bool RequirementsChecked = false);
+
+public sealed record JobRequirementDto(
+    string Text,
+    /// <summary>blocker | required | preferred | implicit</summary>
+    string Class,
+    bool Met,
+    IReadOnlyList<string> Missing,
+    string? Evidence);
+
+public sealed record JobRequirementsDto(
+    string JobId,
+    IReadOnlyList<JobRequirementDto> Requirements,
+    int UnmetBlockers,
+    int UnmetRequired,
+    bool UsedModel,
+    string? Model,
+    string Method);
+
+public sealed record SkillTermDto(
+    string Id,
+    string Term,
+    string Normalized,
+    int Occurrences,
+    string Origin,
     string CreatedAt);
+
+public sealed record ProposeDictionaryRequest(bool? UseModel);
+
+public sealed record ProposeDictionaryResponse(
+    IReadOnlyList<PendingFactDto> Queued,
+    int Proposed);
+
+// ---- Job quality --------------------------------------------------------
+
+public sealed record JobFlagDto(string Kind, string Severity, string Detail, string? Quote);
+
+public sealed record JobQualityDto(
+    string JobId,
+    IReadOnlyList<JobFlagDto> Flags,
+    bool HasWarnings,
+    bool UsedModel,
+    string Method);
+
+// ---- Gap ramp -----------------------------------------------------------
+
+public sealed record GapSuggestionDto(
+    string Text,
+    string BuildsOnFactId,
+    string BuildsOnFactText,
+    string Why);
+
+public sealed record GapRampRequest
+{
+    public string? Requirement { get; init; }
+    public string? RequirementClass { get; init; }
+    public List<string>? Missing { get; init; }
+}
+
+public sealed record GapRampDto(
+    string Requirement,
+    string Class,
+    IReadOnlyList<string> Missing,
+    IReadOnlyList<GapSuggestionDto> Suggestions,
+    string? NearestFact,
+    /// <summary>False for an unmet requirement this week cannot close, such as a years requirement.</summary>
+    bool Closable,
+    bool UsedModel,
+    string Method);
+
+// ---- Interview ----------------------------------------------------------
+
+public sealed record InterviewQuestionDto(
+    string Text,
+    string Probes,
+    string GroundedIn,
+    bool Risk,
+    string RiskNote);
+
+public sealed record InterviewPrepDto(
+    string JobId,
+    string VersionId,
+    IReadOnlyList<InterviewQuestionDto> Questions,
+    bool UsedModel,
+    string? Model,
+    string Method,
+    IReadOnlyList<string> Notes);
 
 public sealed record SearchSummary(
     string RunId,
@@ -368,6 +531,14 @@ public sealed record PatchTrackerRequest
     public string? ResumeVersionId { get; init; }
 }
 
+public sealed record ImportTrackerRequest
+{
+    /// <summary>The pasted file contents.</summary>
+    public string? Json { get; init; }
+    /// <summary>Overwrite entries that are already tracked. Off by default so an old file cannot undo newer work.</summary>
+    public bool? Overwrite { get; init; }
+}
+
 // ---- Models / routing -------------------------------------------------------
 
 public sealed record ProviderDto(
@@ -439,6 +610,24 @@ public sealed record RouteEntryRequest(string ProviderId, string Model);
 
 public sealed record RoutePreviewResponse(bool Ok, string Message, long ElapsedMs, string? Error);
 
+public sealed record ModelUsageDto(
+    string Id,
+    string Workflow,
+    string Provider,
+    string Model,
+    int PromptTokens,
+    int CompletionTokens,
+    bool Cached,
+    long ElapsedMs,
+    string CreatedAt);
+
+public sealed record ModelUsageSummaryDto(
+    string Workflow,
+    int Calls,
+    int CachedCalls,
+    int Tokens,
+    long AvgMs);
+
 // ---- System -----------------------------------------------------------------
 
 public sealed record CapabilitiesResponse(
@@ -459,6 +648,10 @@ public sealed record MemMetricsResponse(
     int Threads);
 
 public sealed record HealthResponse(string Status, string Version, long UptimeSeconds);
+
+public sealed record ModelUsageResponse(
+    IReadOnlyList<ModelUsageSummaryDto> ByWorkflow,
+    IReadOnlyList<ModelUsageDto> Recent);
 
 public sealed record ConfigResponse(
     bool AuthRequired,

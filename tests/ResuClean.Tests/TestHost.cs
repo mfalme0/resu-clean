@@ -11,7 +11,7 @@ namespace ResuClean.Tests;
 /// </summary>
 public sealed class TestHost : IDisposable
 {
-    public TestHost()
+    public TestHost(int cacheTtlSeconds = 0)
     {
         DataDir = Path.Combine(Path.GetTempPath(), "resu-clean-tests", Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(DataDir);
@@ -20,7 +20,7 @@ public sealed class TestHost : IDisposable
         AppConfig = new Configuration.AppConfig
         {
             DataDir = DataDir,
-            CacheTtlSeconds = 0,
+            CacheTtlSeconds = cacheTtlSeconds,
             SourceMinIntervalMs = 0,
             MaxUploadBytes = 10 * 1024 * 1024,
             MaxConcurrency = 2
@@ -29,12 +29,18 @@ public sealed class TestHost : IDisposable
         Db = new Db(AppConfig);
         Profile = new ProfileService(Db);
         ProviderRegistry = new ProviderService(Db, new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
-        Router = new ModelRouter(Db, ProviderRegistry);
+        Router = new ModelRouter(Db, ProviderRegistry, AppConfig);
         Store = new ResumeStore(Db, AppConfig);
         Registry = new SourceRegistry(Db);
         Http = new SourceHttp(Db, AppConfig);
         Jobs = new JobSearchService(Db, Registry, Http);
         App = new ApplicationService(Db, Jobs, Store, Profile, Router);
+        Ledger = new RewriteLedger(Db);
+        Dictionary = new SkillDictionaryService(Db, Router, Profile, Store);
+
+        // Keywords holds the approved dictionary in a process-level static, so a test that approves
+        // a term would otherwise change the score every later test computes.
+        Keywords.SetExtraSkills(Array.Empty<string>());
     }
 
     public string DataDir { get; }
@@ -48,6 +54,11 @@ public sealed class TestHost : IDisposable
     public SourceHttp Http { get; }
     public JobSearchService Jobs { get; }
     public ApplicationService App { get; }
+    public RewriteLedger Ledger { get; }
+    public SkillDictionaryService Dictionary { get; }
+
+    /// <summary>The workflows service, wired exactly as production wires it.</summary>
+    public ResumeWorkflows Workflows() => new(Db, Profile, Router, Ledger);
 
     /// <summary>Runs one SQL statement against the test database.</summary>
     public void Execute(string sql, params Microsoft.Data.Sqlite.SqliteParameter[] parameters)

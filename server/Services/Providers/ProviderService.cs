@@ -185,10 +185,22 @@ public sealed class ProviderService
 
     // ---- Calls -------------------------------------------------------------
 
-    public sealed record ModelReply(string Text, string Provider, string Model, int PromptTokens, int CompletionTokens);
+    public sealed record ModelReply(
+        string Text,
+        string Provider,
+        string Model,
+        int PromptTokens,
+        int CompletionTokens,
+        IReadOnlyList<string>? Citations = null,
+        bool UsedNativeSearch = false);
 
-    /// <summary>Single provider call. Failures throw so the router can fall back.</summary>
-    public async Task<ModelReply> CallAsync(ProviderDto provider, string model, string system, string user, CancellationToken ct = default)
+    /// <summary>
+    /// Single provider call. Failures throw so the router can fall back.
+    /// Set <paramref name="allowWebSearch"/> to request the provider's own server-side search tool;
+    /// only providers that actually implement it will honour it, and the reply reports whether they
+    /// did via <see cref="ModelReply.UsedNativeSearch"/>.
+    /// </summary>
+    public async Task<ModelReply> CallAsync(ProviderDto provider, string model, string system, string user, CancellationToken ct = default, bool allowWebSearch = false)
     {
         var key = ResolveKey(provider);
         var requiresKey = !IsKeyless(provider);
@@ -198,8 +210,8 @@ public sealed class ProviderService
             throw new InvalidOperationException($"Provider '{provider.Name}' has no model selected for this workflow.");
 
         var (url, payload, headers) = provider.Type == "anthropic"
-            ? BuildAnthropic(provider.BaseUrl, model, key.Value, system, user)
-            : BuildOpenAi(provider.BaseUrl, model, key.Value, system, user);
+            ? BuildAnthropic(provider.BaseUrl, model, key.Value, system, user, allowWebSearch)
+            : BuildOpenAi(provider.BaseUrl, model, key.Value, system, user, allowWebSearch);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
@@ -229,33 +241,66 @@ public sealed class ProviderService
         provider.BaseUrl.Contains("ollama", StringComparison.OrdinalIgnoreCase);
 
     private static (string Url, string Payload, Dictionary<string, string> Headers) BuildOpenAi(
-        string baseUrl, string model, string? key, string system, string user)
+        string baseUrl, string model, string? key, string system, string user, bool webSearch = false)
     {
         var url = $"{baseUrl}/chat/completions";
-        var payload = JsonSerializer.Serialize(new
-        {
-            model,
-            messages = new object[] { new { role = "system", content = system }, new { role = "user", content = user } },
-            temperature = 0.2,
-            max_tokens = 4096
-        });
+        var messages = new object[] { new { role = "system", content = system }, new { role = "user", content = user } };
+
+        // web_search_options is OpenAI's server-side search. Models that do not implement it reject
+        // the request, which is why the router treats a native attempt as fall-through rather than
+        // as a hard failure.
+        var payload = webSearch
+            ? JsonSerializer.Serialize(new
+            {
+                model,
+                messages,
+                temperature = 0.2,
+                max_tokens = 4096,
+                web_search_options = new { search_context_size = "medium" }
+            })
+            : JsonSerializer.Serialize(new
+            {
+                model,
+                messages,
+                temperature = 0.2,
+                max_tokens = 4096
+            });
+
         var headers = new Dictionary<string, string>();
         if (!string.IsNullOrEmpty(key)) headers["Authorization"] = $"Bearer {key}";
         return (url, payload, headers);
     }
 
     private static (string Url, string Payload, Dictionary<string, string> Headers) BuildAnthropic(
-        string baseUrl, string model, string? key, string system, string user)
+        string baseUrl, string model, string? key, string system, string user, bool webSearch = false)
     {
         var url = baseUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? $"{baseUrl}/messages" : $"{baseUrl}/v1/messages";
-        var payload = JsonSerializer.Serialize(new
-        {
-            model,
-            max_tokens = 4096,
-            temperature = 0.2,
-            system,
-            messages = new object[] { new { role = "user", content = user } }
-        });
+        var messages = new object[] { new { role = "user", content = user } };
+
+        // Anthropic's server tool. max_uses bounds the number of searches so one query cannot turn
+        // into an unbounded bill.
+        var payload = webSearch
+            ? JsonSerializer.Serialize(new
+            {
+                model,
+                max_tokens = 4096,
+                temperature = 0.2,
+                system,
+                messages,
+                tools = new object[]
+                {
+                    new { type = "web_search_20250305", name = "web_search", max_uses = 5 }
+                }
+            })
+            : JsonSerializer.Serialize(new
+            {
+                model,
+                max_tokens = 4096,
+                temperature = 0.2,
+                system,
+                messages
+            });
+
         var headers = new Dictionary<string, string>();
         if (!string.IsNullOrEmpty(key))
         {
@@ -286,7 +331,28 @@ public sealed class ProviderService
         }
         var prompt = root.TryGetProperty("usage", out var usage) && usage.TryGetProperty("prompt_tokens", out var pt) ? pt.GetInt32() : 0;
         var completion = root.TryGetProperty("usage", out var usage2) && usage2.TryGetProperty("completion_tokens", out var ct2) ? ct2.GetInt32() : 0;
-        return new ModelReply(text, provider.Name, model, prompt, completion);
+
+        // OpenAI surfaces search both as a web_search_call on the choice and as url_citations on the
+        // message annotations. Either one tells us the model actually went to the web.
+        var usedSearch = root.TryGetProperty("choices", out var ch) && ch.GetArrayLength() > 0
+            && (ch[0].TryGetProperty("web_search_call", out _) ||
+                (ch[0].TryGetProperty("message", out var m) && m.TryGetProperty("annotations", out var a)
+                 && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() > 0));
+
+        var citations = new List<string>();
+        if (root.TryGetProperty("choices", out var ch2) && ch2.GetArrayLength() > 0
+            && ch2[0].TryGetProperty("message", out var msg) && msg.TryGetProperty("annotations", out var ann)
+            && ann.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in ann.EnumerateArray())
+                if (item.TryGetProperty("url_citation", out var cite) && cite.TryGetProperty("url", out var url))
+                {
+                    var u = url.GetString();
+                    if (!string.IsNullOrWhiteSpace(u) && !citations.Contains(u)) citations.Add(u);
+                }
+        }
+
+        return new ModelReply(text, provider.Name, model, prompt, completion, citations, usedSearch);
     }
 
     private static ModelReply ReadAnthropic(string body, ProviderDto provider, string model)
@@ -294,14 +360,59 @@ public sealed class ProviderService
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
         var sb = new StringBuilder();
+        var citations = new List<string>();
+        var usedSearch = false;
+
         if (root.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Array)
         {
             foreach (var block in content.EnumerateArray())
+            {
+                if (block.TryGetProperty("type", out var type) &&
+                    type.GetString() is "web_search_tool_result" or "server_tool_use")
+                {
+                    usedSearch = true;
+                    continue;
+                }
+
                 if (block.TryGetProperty("text", out var t)) sb.Append(t.GetString());
+
+                // Citations arrive as citation blocks naming the search result index they came from.
+                if (block.TryGetProperty("type", out var ctype) && ctype.GetString() == "citations")
+                    CollectCitationUrls(block, citations);
+            }
         }
+
+        // The indexed sources are also echoed on the top-level metadata.
+        if (root.TryGetProperty("search_results", out var results) && results.ValueKind == JsonValueKind.Array)
+        {
+            usedSearch = true;
+            foreach (var r in results.EnumerateArray())
+                if (r.TryGetProperty("url", out var u))
+                {
+                    var url = u.GetString();
+                    if (!string.IsNullOrWhiteSpace(url) && !citations.Contains(url)) citations.Add(url);
+                }
+        }
+
         var prompt = root.TryGetProperty("usage", out var usage) && usage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0;
         var completion = root.TryGetProperty("usage", out var usage2) && usage2.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0;
-        return new ModelReply(sb.ToString(), provider.Name, model, prompt, completion);
+        return new ModelReply(sb.ToString(), provider.Name, model, prompt, completion, citations, usedSearch);
+    }
+
+    /// <summary>
+    /// Anthropic citation blocks reference their source either inline as a url, or via an index into
+    /// search_results. Pull whatever url is actually present.
+    /// </summary>
+    private static void CollectCitationUrls(JsonElement block, List<string> citations)
+    {
+        if (!block.TryGetProperty("cited_text", out _)) return;
+
+        foreach (var name in new[] { "url", "source_url" })
+        {
+            if (!block.TryGetProperty(name, out var u)) continue;
+            var url = u.GetString();
+            if (!string.IsNullOrWhiteSpace(url) && !citations.Contains(url)) citations.Add(url);
+        }
     }
 
     public async Task<TestProviderResponse> TestAsync(ProviderDto provider, string? model, CancellationToken ct = default)

@@ -97,6 +97,51 @@ public static class ResumeEndpoints
         group.MapPost("/versions/{versionId}/update", (string versionId, UpdateResumeRequest body, OpRunner ops, ResumeWorkflows workflows) =>
             Api.Guard(() => Task.FromResult(ApiOps.AcceptedRun(ops, "update_resume", body,
                 async (payload, ct) => (object?)await workflows.UpdateAsync(versionId, payload, ct).ConfigureAwait(false)))));
+
+        /// <summary>
+        /// Which model rewrites were worth accepting. Answers "is routing this workflow to that model
+        /// making my resume better or worse" with counts rather than impressions.
+        /// </summary>
+        group.MapGet("/rewrites", (RewriteLedger ledger) => Api.Ok(new RewriteLedgerResponse(
+            ledger.Summary().Select(r => new RewriteLedgerRowDto(r.Workflow, r.Model, r.Total, r.Accepted, r.AvgDelta)).ToList(),
+            ledger.Recent(50))));
+
+        /// <summary>
+        /// Checks a resume version against the verified profile, and queues anything unsupported for
+        /// approval. Runs without a model: the deterministic pass alone catches unverified figures.
+        /// </summary>
+        group.MapPost("/versions/{versionId}/fact-check", (string versionId, OpRunner ops, FactSupportService facts, ResumeStore store) =>
+            Api.Guard(() =>
+            {
+                var text = store.GetText(versionId)
+                    ?? throw new KeyNotFoundException("That version no longer exists.");
+                return Task.FromResult(ApiOps.AcceptedRun(ops, "fact_check", new { },
+                    async (_, ct) =>
+                    {
+                        var report = await facts.CheckAsync(versionId, text, ct).ConfigureAwait(false);
+                        return (object?)new FactCheckReportDto(
+                            report.VersionId, report.Checked, report.Grounded, report.Ungrounded,
+                            report.Claims.Select(c => new FactClaimDto(c.Text, c.Category, c.FactIds, c.Grounded, c.Note)).ToList(),
+                            report.UsedModel, report.Model, report.Method, report.Queued);
+                    }));
+            }));
+
+        group.MapGet("/fact-checks", (FactSupportService facts) => Api.Ok(facts.Recent(25)));
+
+        /// <summary>
+        /// Saves text as a new version after the user overrules the rewrite gate. This is how the
+        /// rejected candidate becomes usable: the gate refuses to guess, it does not forbid.
+        /// </summary>
+        group.MapPost("/versions/{versionId}/accept-text", (string versionId, AcceptTextRequest body, ResumeStore store) =>
+            Api.Guard(() =>
+            {
+                if (string.IsNullOrWhiteSpace(body.Text))
+                    throw new ArgumentException("There is no text to save.");
+                var resumeId = store.ResumeIdOf(versionId)
+                    ?? throw new KeyNotFoundException("That version no longer exists.");
+                var newVersionId = store.AddVersion(resumeId, versionId, body.Label ?? "Kept by hand", body.Text, "paste");
+                return Task.FromResult(Api.Ok(new { versionId = newVersionId }));
+            }));
     }
 
     private static async Task<(string Text, string Label, string SourceKind, string LabelHint)> ReadIntakeAsync(

@@ -4,6 +4,7 @@
     | 'doc'
     | 'check'
     | 'search'
+    | 'compass'
     | 'brush'
     | 'gear'
     | 'mail'
@@ -36,6 +37,8 @@
     <path d="M4 13l5 5L20 6" />
   {:else if name === 'search'}
     <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.5-4.5" />
+  {:else if name === 'compass'}
+    <circle cx="12" cy="12" r="9" /><path d="M15.5 8.5l-2 5-5 2 2-5z" />
   {:else if name === 'brush'}
     <path d="M4 20h16" /><path d="M6 16l9-9 3 3-9 9H6z" />
   {:else if name === 'gear'}

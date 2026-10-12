@@ -160,7 +160,7 @@ public sealed class JobSearchService
             if (!string.IsNullOrEmpty(fetched.RobotsNote))
                 return new SourceResult(source, Array.Empty<RawJob>(), new SourceError(source.Name, fetched.RobotsNote));
             if (string.IsNullOrWhiteSpace(fetched.Body))
-                return new SourceResult(source, Array.Empty<RawJob>(), new SourceError(source.Name, $"No content returned (status {fetched.Status})."));
+                return new SourceResult(source, Array.Empty<RawJob>(), new SourceError(source.Name, DescribeEmpty(source, url, fetched.Status)));
 
             var items = SourceParser.ParseAsync(source, fetched.Body, url, ct);
             return new SourceResult(source, items, null);
@@ -173,6 +173,36 @@ public sealed class JobSearchService
         {
             return new SourceResult(source, Array.Empty<RawJob>(), new SourceError(source.Name, ex.Message));
         }
+    }
+
+    /// <summary>
+    /// Turns a bare status code into something the user can act on. The common cases are a bot wall
+    /// and an unapproved credential, and a bare "403" tells them nothing about which it is.
+    /// </summary>
+    private static string DescribeEmpty(SourceDto source, string url, int status)
+    {
+        if (status == 403 || status == 401)
+        {
+            if (url.Contains("RELIEFWEB_APPNAME", StringComparison.OrdinalIgnoreCase))
+                return "ReliefWeb returned 403. Since 1 Nov 2025 the appname parameter must be pre-approved by "
+                     + "ReliefWeb: replace RELIEFWEB_APPNAME in the URL with an appname you have applied for.";
+
+            if (!string.IsNullOrEmpty(source.RequiresKey))
+                return $"The provider refused the request (status {status}). Check that {source.RequiresKey} is set "
+                     + "and that the key is valid for this endpoint.";
+
+            return $"The provider refused the request (status {status}). This is usually a bot wall or a key this "
+                 + "plan is not allowed to use, not a malformed URL. Link sources exist for exactly this reason.";
+        }
+
+        if (status == 404)
+            return $"The endpoint returned 404, so the URL or field mapping has changed. Press Test on the Sources "
+                 + "screen to confirm the path, then fix the source.";
+
+        if (status == 429)
+            return "Rate limited by the provider (429). Raise this source's minimum interval before searching again.";
+
+        return $"No content returned (status {status}).";
     }
 
     private List<SourceDto> SelectSources(JobSearchRequest request)
@@ -234,6 +264,29 @@ public sealed class JobSearchService
 
     // ---- Queries -----------------------------------------------------------
 
+    /// <summary>
+    /// Unmet blockers and unmet required items per job, as correlated subqueries. Counting them here
+    /// rather than storing a column keeps the number honest: reclassifying a posting, or approving a
+    /// fact that closes a gap, changes the ranking on the next read with no migration and no cache.
+    /// </summary>
+    private const string RequirementCounts =
+        "(SELECT COUNT(*) FROM job_requirements qr WHERE qr.job_id = jobs.id AND qr.class = 'blocker' AND qr.met = 0) AS unmet_blockers, " +
+        "(SELECT COUNT(*) FROM job_requirements qr WHERE qr.job_id = jobs.id AND qr.class = 'required' AND qr.met = 0) AS unmet_required, " +
+        "(SELECT COUNT(*) FROM job_requirements qr WHERE qr.job_id = jobs.id) AS requirements_total";
+
+    /// <summary>
+    /// Rank by what is actually winnable rather than by keyword overlap alone.
+    ///
+    /// Three tiers, in order: a posting you can meet, a posting nobody has classified yet, and a
+    /// posting carrying a blocker you do not have. The middle tier is deliberately not folded in
+    /// with the first — an unchecked posting is unknown, not clear, and treating it as clear is how
+    /// a seven-year requirement ends up at the top of the list.
+    /// </summary>
+    private const string WinnabilityOrder =
+        "CASE WHEN " + "(SELECT COUNT(*) FROM job_requirements qr WHERE qr.job_id = jobs.id) > 0 " +
+        "THEN " + "(SELECT COUNT(*) FROM job_requirements qr WHERE qr.job_id = jobs.id AND qr.class = 'blocker' AND qr.met = 0) " +
+        "ELSE -1 END ASC";
+
     public Paged<JobDto> ListJobs(int page, int size, string? query, string? sourceId, bool? manual, string? versionId)
     {
         page = Math.Max(1, page);
@@ -267,8 +320,8 @@ public sealed class JobSearchService
 
         var total = Convert.ToInt32(Db.Scalar(conn, "SELECT COUNT(*) FROM jobs" + where, parameters.ToArray()) ?? 0);
         var offset = (page - 1) * size;
-        var sql = "SELECT id,title,company,location,url,posted_at,description,source_id,source_name,match_pct,remote,is_manual,best_version_id,created_at " +
-                  "FROM jobs" + where + " ORDER BY match_pct DESC, created_at DESC LIMIT @limit OFFSET @offset";
+        var sql = "SELECT id,title,company,location,url,posted_at,description,source_id,source_name,match_pct,remote,is_manual,best_version_id,created_at, " +
+                  RequirementCounts + " FROM jobs" + where + " ORDER BY " + WinnabilityOrder + ", match_pct DESC, created_at DESC LIMIT @limit OFFSET @offset";
         var pageParameters = new List<SqliteParameter>(parameters)
         {
             Db.P("@limit", size),
@@ -279,7 +332,8 @@ public sealed class JobSearchService
             Db.Str(r, "id"), Db.Str(r, "title"), Db.Str(r, "company"), Db.Str(r, "location"), Db.Str(r, "url"),
             Db.StrOrNull(r, "posted_at"), Db.Str(r, "description"), Db.Str(r, "source_id"), Db.Str(r, "source_name"),
             Db.Int(r, "match_pct"), Db.Bool(r, "remote"), Db.Bool(r, "is_manual"), Db.StrOrNull(r, "best_version_id"),
-            Db.Str(r, "created_at")), pageParameters.ToArray());
+            Db.Str(r, "created_at"), Db.Int(r, "unmet_blockers"), Db.Int(r, "unmet_required"),
+            Db.Int(r, "requirements_total") > 0), pageParameters.ToArray());
 
         return new Paged<JobDto>(items, page, size, total);
     }

@@ -23,14 +23,45 @@ public static partial class AtsScorer
     [GeneratedRegex(@"^[\s\u00A0]*[-*\u2022\u25AA\u25CF\u25E6\u2013\u2014\u2192\u2794>\u00BB]*[\s\u00A0]+", RegexOptions.None, 2000)]
     private static partial Regex BulletPrefix();
 
-    [GeneratedRegex(@"\b\d+(?:\.\d+)?\s*(?:%|percent)\b", RegexOptions.IgnoreCase, 2000)]
+    // The trailing boundary has to be a negative lookahead rather than \b: '%' is a non-word
+    // character, so "38%" followed by a space never has a boundary after it and never matched.
+    [GeneratedRegex(@"\b\d+(?:\.\d+)?\s*(?:%(?!\w)|percent\b)", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex Percent();
 
-    [GeneratedRegex(@"[$€£]\s?\d[\d,.]{2,}|\b\d[\d,.]{2,}\s?(?:k|m|bn|million|billion|thousand)?\b", RegexOptions.IgnoreCase, 2000)]
+    // A currency amount has to LOOK like one: either a currency symbol, or a magnitude suffix.
+    // An earlier version made the suffix optional, so a bare 4-digit employment year matched here
+    // and the highest-weighted check in the scorer passed on nothing but date ranges.
+    [GeneratedRegex(@"[$€£¥₹]\s?\d[\d,.]*\b|\b\d[\d,.]*\s?(?:k|m|bn|million|billion|thousand)\b", RegexOptions.IgnoreCase, 2000)]
     private static partial Regex Money();
 
-    [GeneratedRegex(@"\b\d[\d,.]{2,}\b", RegexOptions.None, 2000)]
-    private static partial Regex BigNumber();
+    // A count: a comma-grouped figure of 1,000 or more, or a number followed by a thing you can
+    // count. Years and months are deliberately excluded: "6 years of experience" is a tenure
+    // statement, not an achievement, and counting it is what inflated the score.
+    private const string CountUnits =
+        "users?|servers?|requests?|transactions?|tickets?|endpoints?|nodes?|clusters?|databases?|tables?|reports?|"
+        + "records?|rows?|queries?|scripts?|pipelines?|services?|instances?|machines?|devices?|sites?|clients?|"
+        + "customers?|projects?|teams?|members?|analysts?|engineers?|staff|people|hours?|days?|weeks?";
+
+    [GeneratedRegex(@"\b\d{1,3}(?:,\d{3})+\b|\b\d+\s+(?:" + CountUnits + @")\b", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex Volume();
+
+    [GeneratedRegex(@"https?://\S+", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex Url();
+
+    /// <summary>
+    /// Spans that contain digits but prove nothing: date ranges, bare years, phone numbers, email
+    /// addresses and URLs. These are blanked out before the evidence patterns run, which is what
+    /// makes the three patterns above disjoint from each other and from employment history.
+    /// </summary>
+    private static readonly Regex[] NotEvidence =
+    {
+        Url(),
+        ProfileLink(),
+        DateRange(),
+        Phone(),
+        Email(),
+        FourDigitYear()
+    };
 
     [GeneratedRegex(@"(?i)\b(19|20)\d{2}\b\s*(?:-|–|—|to)\s*(?:\b(19|20)\d{2}\b|current|present|now)", RegexOptions.None, 2000)]
     private static partial Regex DateRange();
@@ -224,17 +255,49 @@ public static partial class AtsScorer
         return new AtsCheck("bullets", "Bulleted experience", "format", passed, detail, tip, weight);
     }
 
+    /// <summary>
+    /// Three disjoint kinds of evidence, matched over text with dates and contact details removed.
+    /// Each distinct span counts once, so "38% across 1,200 transactions" is two results, not four.
+    /// </summary>
+    private static readonly (string Kind, Regex Pattern)[] EvidencePatterns =
+    {
+        ("percentages", Percent()),
+        ("currency amounts", Money()),
+        ("counts", Volume())
+    };
+
     private static AtsCheck Quantified(string text)
     {
         const int weight = 18;
-        var percents = Percent().Matches(text).Count;
-        var money = Money().Matches(text).Count;
-        var bigNums = BigNumber().Matches(text).Count;
-        var others = Math.Max(0, bigNums - percents);
-        var total = percents + money + others;
-        var passed = total >= 3;
 
-        var detail = $"{total} quantified results detected: {percents} percentages, {money} currency amounts, {others} other large numbers.";
+        // Strip dates, phone numbers, emails and URLs first. Without this the employment history
+        // alone satisfies an 18-point check that is supposed to be measuring measurable impact.
+        var masked = NotEvidence.Aggregate(text, (current, pattern) => pattern.Replace(current, " "));
+
+        var spans = new List<(int Start, int End)>();
+        var kinds = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (kind, pattern) in EvidencePatterns)
+        {
+            foreach (Match m in pattern.Matches(masked))
+            {
+                // Skip anything an earlier pattern already claimed, so one figure is never counted twice.
+                if (spans.Any(s => m.Index < s.End && s.Start < m.Index + m.Length)) continue;
+                spans.Add((m.Index, m.Index + m.Length));
+                kinds[kind] = kinds.TryGetValue(kind, out var n) ? n + 1 : 1;
+            }
+        }
+
+        var total = spans.Count;
+        var passed = total >= 3;
+        var breakdown = string.Join(", ", kinds.OrderByDescending(k => k.Value)
+            .Select(k => $"{k.Value} {k.Key}"));
+
+        var detail = passed
+            ? $"{total} quantified results found: {breakdown}. Employment dates, phone numbers and links are not counted."
+            : total == 0
+                ? "No measurable results found. Dates and phone numbers are excluded, so only figures you can defend count."
+                : $"{total} quantified results found: {breakdown}. Employment dates and contact details are not counted.";
+
         var tip = passed
             ? "You have measurable results, which is the strongest signal for both ATS scoring and human reviewers."
             : "Add numbers to at least 3 achievements: team size, revenue, percentage improvement, volume, budget, time saved. Only use figures you can defend.";

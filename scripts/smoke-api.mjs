@@ -43,7 +43,7 @@ function assertNotTask(label, body) {
   }
 }
 
-async function call(label, method, path, body, { expectStatus = 200, check } = {}) {
+async function call(label, method, path, body, { expectStatus = 200, check, expectType } = {}) {
   try {
     const res = await fetch(`${base}${path}`, {
       method,
@@ -55,6 +55,14 @@ async function call(label, method, path, body, { expectStatus = 200, check } = {
       console.error(`  FAIL ${label}: expected ${expectStatus}, got ${res.status} ${text.slice(0, 160)}`);
       failures++;
       return null;
+    }
+    if (expectType) {
+      const actual = res.headers.get('content-type') || '';
+      if (!actual.includes(expectType)) {
+        console.error(`  FAIL ${label}: expected content-type ${expectType}, got "${actual}"`);
+        failures++;
+        return null;
+      }
     }
     assertNotTask(label, text);
     if (check) {
@@ -137,6 +145,17 @@ try {
   await call('GET /profile/pending', 'GET', '/profile/pending', undefined, { check: (o) => (Array.isArray(o) ? null : 'expected an array') });
   await call('GET /profile/pending/count', 'GET', '/profile/pending/count', undefined, { check: has(['count']) });
 
+  // ---- scoring dictionary ----
+  // The proposer may only ever queue a term for approval. If it could write to the dictionary
+  // directly, a scoring list would be something the tool decides instead of you.
+  await call('GET /profile/dictionary', 'GET', '/profile/dictionary', undefined, { check: (o) => (Array.isArray(o) ? null : 'expected an array') });
+  const proposal = await call('POST /profile/dictionary/propose', 'POST', '/profile/dictionary/propose', { useModel: false },
+    { check: has(['queued', 'proposed']) });
+  if (proposal && (proposal.queued || []).some((q) => !q.id || !q.text)) {
+    console.error('  FAIL dictionary/propose: a queued proposal is not a real pending fact');
+    failures++;
+  }
+
   // ---- resumes ----
   await call('GET /resumes', 'GET', '/resumes', undefined, { check: isList });
   const created = await call('POST /resumes', 'POST', '/resumes',
@@ -163,6 +182,33 @@ try {
 
     await call('POST ats', 'POST', `/resumes/versions/${created.versionId}/ats`, { useModel: false },
       { expectStatus: 202, check: has(['opId']) });
+
+    // Grounding: the deterministic pass needs no model, and must queue rather than delete.
+    const grounded = await call('POST fact-check', 'POST', `/resumes/versions/${created.versionId}/fact-check`, {},
+      { expectStatus: 202, check: has(['opId']) });
+    if (grounded) {
+      const done = await waitForOp('fact-check', grounded);
+      const result = done?.result;
+      if (!result || typeof result.checked !== 'number' || typeof result.ungrounded !== 'number') {
+        console.error('  FAIL fact-check: expected checked and ungrounded counts');
+        failures++;
+      } else if (result.method !== 'deterministic') {
+        console.error(`  FAIL fact-check: expected the deterministic method with no route, got "${result.method}"`);
+        failures++;
+      } else if (!Array.isArray(result.claims) || !Array.isArray(result.queued)) {
+        console.error('  FAIL fact-check: claims and queued must both be arrays');
+        failures++;
+      } else {
+        console.log(`  ok   fact-check (${result.checked} claims, ${result.ungrounded} queued)`);
+      }
+    }
+    await call('GET /fact-checks', 'GET', '/resumes/fact-checks', undefined,
+      { check: (o) => (Array.isArray(o) ? null : 'expected an array') });
+
+    // The rewrite ledger is the only honest answer to "is this model pulling its weight": every
+    // candidate was re-scored before it was shown, and this is the record of what happened.
+    await call('GET /resumes/rewrites', 'GET', '/resumes/rewrites', undefined,
+      { check: (o) => (Array.isArray(o?.rows) && Array.isArray(o?.recent) ? null : 'expected rows and recent arrays') });
 
     // ATS must return a 0-100 score with a tip on every check.
     const ats = await call('POST /jobs', 'POST', '/jobs',
@@ -193,6 +239,101 @@ try {
       await call('GET /jobs', 'GET', '/jobs', undefined, { check: isList });
       await call('GET /jobs/{id}', 'GET', `/jobs/${ats.id}`, undefined, { check: has(['id', 'title', 'sourceName']) });
 
+      // ---- requirement classification ----
+      // Split a posting's demands and check them against the profile, with no model configured.
+      const reqs = await call('GET /jobs/{id}/requirements', 'GET', `/jobs/${ats.id}/requirements`, undefined,
+        { check: has(['requirements', 'unmetBlockers', 'unmetRequired', 'method']) });
+      if (reqs) {
+        const classes = new Set((reqs.requirements || []).map((r) => r.class));
+        if (typeof reqs.unmetBlockers !== 'number' || typeof reqs.unmetRequired !== 'number') {
+          console.error('  FAIL requirements: unmet counts must be numbers');
+          failures++;
+        } else if (![...classes].every((c) => ['blocker', 'required', 'preferred', 'implicit'].includes(c))) {
+          console.error(`  FAIL requirements: unexpected class in ${[...classes].join(', ')}`);
+          failures++;
+        } else {
+          console.log(`  ok   requirements (${reqs.requirements.length} found, ${reqs.unmetBlockers} blockers)`);
+        }
+      }
+
+      const reranked = await call('POST /jobs/requirements/refresh', 'POST', '/jobs/requirements/refresh', {},
+        { check: has(['checkedJobs', 'unmetBlockers']) });
+      if (reranked && typeof reranked.checkedJobs !== 'number') {
+        console.error('  FAIL requirements/refresh: checkedJobs must be a number');
+        failures++;
+      }
+
+      // The job list must carry the ranking inputs through as real JSON fields.
+      const afterRerank = await call('GET /jobs (ranked)', 'GET', '/jobs', undefined,
+        { check: (o) => (Array.isArray(o?.items) && o.items.every((j) => typeof j.unmetBlockers === 'number' && typeof j.requirementsChecked === 'boolean')
+          ? null : 'expected unmetBlockers and requirementsChecked on every row') });
+
+      // ---- posting quality ----
+      // Flags are judgement about someone else's posting, so a flag without a quote is a guess and
+      // must not appear. Staleness is arithmetic and carries no quote at all.
+      const flagCheck = (o) => {
+        if (!Array.isArray(o?.flags)) return 'expected a flags array';
+        for (const flag of o.flags) {
+          if (flag.severity === 'warn' && !flag.quote) {
+            return `a warning was raised with no quote: "${flag.detail}"`;
+          }
+        }
+        return null;
+      };
+      const quality = await call('GET /jobs/{id}/quality', 'GET', `/jobs/${ats.id}/quality`, undefined,
+        { check: (o) => flagCheck(o) ?? (typeof o.hasWarnings === 'boolean' ? null : 'expected hasWarnings') });
+      if (quality && quality.method !== 'deterministic') {
+        console.error(`  FAIL quality: expected the deterministic method with no route, got "${quality.method}"`);
+        failures++;
+      }
+
+      // ---- gap ramp ----
+      // Every suggestion must name the verified fact it builds on. An uncited one is a shopping
+      // list dressed up as advice, so it is discarded server-side.
+      const ramp = await call('POST /jobs/gap-ramp', 'POST', '/jobs/gap-ramp',
+        { requirement: 'Experience with Terraform', requirementClass: 'required', missing: ['terraform'] },
+        { check: (o) => {
+          const missing = ['requirement', 'class', 'suggestions', 'closable', 'method'].filter((k) => !(k in o));
+          if (missing.length) return `missing keys: ${missing.join(', ')}`;
+          // Nulls are omitted rather than serialised, so "no nearest fact" arrives as an absent key.
+          if (o.nearestFact !== undefined && typeof o.nearestFact !== 'string') {
+            return 'nearestFact must be a string when present';
+          }
+          return null;
+        } });
+      if (ramp) {
+        const uncited = (ramp.suggestions || []).find((s) => !s.buildsOnFactId || !s.buildsOnFactText);
+        if (uncited) {
+          console.error(`  FAIL gap-ramp: a suggestion arrived with no verified fact behind it: "${uncited.text}"`);
+          failures++;
+        } else if (typeof ramp.closable !== 'boolean') {
+          console.error('  FAIL gap-ramp: closable must be a boolean, so "not closable" is never mistaken for "no suggestions"');
+          failures++;
+        }
+      }
+
+      // ---- interview prep ----
+      // The claims nothing backs are reported even though no model is configured: those are the
+      // landmines, and finding them does not need a model.
+      await call('POST best-fit', 'POST', `/resumes/versions/${created.versionId}/best-fit`, undefined,
+        { check: has(['versionId', 'bestFit']) });
+      const prep = await call('GET /jobs/{id}/interview', 'GET', `/jobs/${ats.id}/interview`, undefined,
+        { check: has(['jobId', 'versionId', 'questions', 'notes', 'method']) });
+      if (prep) {
+        if (prep.method !== 'deterministic') {
+          console.error(`  FAIL interview: expected the deterministic method with no route, got "${prep.method}"`);
+          failures++;
+        }
+        // Every risk the report raises has to point at a claim, not at a hunch.
+        const unanchored = (prep.questions || []).find((q) => q.risk && !q.groundedIn);
+        if (unanchored) {
+          console.error(`  FAIL interview: a risk was raised with nothing to anchor it: "${unanchored.text}"`);
+          failures++;
+        }
+      }
+      await call('GET /jobs/{id}/interview (unknown job) -> 404', 'GET', '/jobs/job_missing/interview', undefined,
+        { expectStatus: 404 });
+
       const entry = await call('POST /tracker', 'POST', '/tracker', { jobId: ats.id, status: 'sent-by-me', notes: 'smoke' },
         { expectStatus: 201, check: has(['id', 'status']) });
       if (entry && entry.status !== 'sent') {
@@ -200,13 +341,58 @@ try {
         failures++;
       }
       await call('GET /tracker', 'GET', '/tracker', undefined, { check: isList });
+
+      // ---- tracker export / import ----
+      // Checked over real HTTP so a serialised Task or a mis-cased property cannot pass as working.
+      const exported = await call('GET /tracker/export-text', 'GET', '/tracker/export-text', undefined,
+        { check: has(['json']) });
+      if (exported && typeof exported.json === 'string') {
+        try {
+          const parsed = JSON.parse(exported.json);
+          const shapeOk = parsed && typeof parsed === 'object' && Object.values(parsed).every(
+            (v) => v && typeof v === 'object'
+              && typeof v.stage === 'string' && typeof v.note === 'string'
+              && typeof v.applied === 'string' && typeof v.updated === 'string');
+          if (!shapeOk) {
+            console.error('  FAIL tracker/export: entries are not {stage,note,applied,updated} strings');
+            failures++;
+          }
+        } catch {
+          console.error('  FAIL tracker/export: response is not valid JSON');
+          failures++;
+        }
+      }
+
+      await call('GET /tracker/export', 'GET', '/tracker/export', undefined, { expectType: 'application/json' });
+
+      const file = JSON.stringify({
+        smokeco: { stage: 'applied', note: 'from smoke', applied: '2026-10-11', updated: '2026-10-11' }
+      });
+
+      const imported = await call('POST /tracker/import', 'POST', '/tracker/import', { json: file },
+        { check: has(['imported', 'created', 'updated', 'skipped']) });
+      if (imported && imported.created !== 1) {
+        console.error(`  FAIL tracker/import: expected 1 new entry, got ${imported.created}`);
+        failures++;
+      }
+
+      // Re-importing the same file must not create a second entry.
+      const repeat = await call('POST /tracker/import (repeat)', 'POST', '/tracker/import', { json: file },
+        { check: has(['imported', 'skipped']) });
+      if (repeat && repeat.imported !== 0) {
+        console.error(`  FAIL tracker/import: a repeat import created ${repeat.imported} entries instead of 0`);
+        failures++;
+      }
+
+      await call('POST /tracker/import (bad json)', 'POST', '/tracker/import', { json: '{ nope' },
+        { expectStatus: 400 });
     }
   }
 
   // ---- sources ----
   await call('GET /sources', 'GET', '/sources', undefined, { check: (o) => (Array.isArray(o) ? null : 'expected an array') });
   await call('GET /sources/packs/all', 'GET', '/sources/packs/all', undefined,
-    { check: (o) => (Array.isArray(o) && o.length === 2 ? null : 'expected 2 seed packs') });
+    { check: (o) => (Array.isArray(o) && o.length === 4 ? null : 'expected 4 seed packs') });
   await call('GET /jobs/search-url', 'POST', '/jobs/search-url', { name: 'Smoke link source', type: 'link', urlTemplate: 'https://example.org/jobs?q={query}' },
     { check: has(['url']) });
 
@@ -220,8 +406,18 @@ try {
       failures++;
     }
   }
-  await call('GET /routes', 'GET', '/routes', undefined, { check: (o) => (Array.isArray(o) && o.length === 6 ? null : 'expected 6 workflows') });
   await call('GET /routes/clean', 'GET', '/routes/clean', undefined, { check: has(['workflow', 'entries']) });
+  await call('GET /routes', 'GET', '/routes', undefined,
+    { check: (o) => (Array.isArray(o) && o.length === 13 ? null : `expected 13 workflows, got ${Array.isArray(o) ? o.length : 'not an array'}`) });
+
+  // ---- model cost telemetry ----
+  await call('GET /metrics/models', 'GET', '/metrics/models', undefined,
+    { check: (o) => (Array.isArray(o?.byWorkflow) && Array.isArray(o?.recent) ? null : 'expected byWorkflow and recent arrays') });
+
+  // ---- search ----
+  await call('GET /search/capabilities', 'GET', '/search/capabilities', undefined,
+    { check: has(['canSearch']) });
+  await call('POST /search (no query)', 'POST', '/search', {}, { expectStatus: 400 });
 
   // ---- errors use the standard envelope ----
   const missing = await call('GET unknown id -> 404', 'GET', '/resumes/res_missing', undefined, { expectStatus: 404 });

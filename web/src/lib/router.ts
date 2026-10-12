@@ -13,6 +13,7 @@ export const routes: RouteDef[] = [
   { path: '/', title: 'Resume', load: () => import('../routes/Resume.svelte') },
   { path: '/profile', title: 'Profile', load: () => import('../routes/Profile.svelte') },
   { path: '/jobs', title: 'Jobs', load: () => import('../routes/Jobs.svelte') },
+  { path: '/search', title: 'Search', load: () => import('../routes/Search.svelte') },
   { path: '/kits', title: 'Kits', load: () => import('../routes/Kits.svelte') },
   { path: '/tracker', title: 'Tracker', load: () => import('../routes/Tracker.svelte') },
   { path: '/models', title: 'Models', load: () => import('../routes/Models.svelte') }

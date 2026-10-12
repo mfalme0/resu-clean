@@ -200,7 +200,7 @@ public class SourceParsingTests : IDisposable
     public void Seed_packs_default_to_link_when_access_is_unclear()
     {
         var packs = _host.Registry.ListPacks();
-        Assert.Equal(2, packs.Count);
+        Assert.Equal(4, packs.Count);
 
         var kenya = packs.Single(p => p.Id == "kenya");
         var linkedin = kenya.Entries.Single(e => e.Name.Contains("LinkedIn"));
@@ -331,7 +331,7 @@ public class SourceParsingTests : IDisposable
     {
         _host.Registry.InstallPack("kenya");
         _host.Registry.InstallPack("kenya");
-        Assert.Equal(11, _host.Registry.List().Count);
+        Assert.Equal(SeedPacks.Kenya.Entries.Length, _host.Registry.List().Count);
     }
 
     [Fact]

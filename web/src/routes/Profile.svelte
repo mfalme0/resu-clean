@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Profile, type ProfileFact, type PendingFact } from '../lib/api';
+  import { api, type Profile, type ProfileFact, type PendingFact, type ProposeDictionaryResult, type SkillTerm } from '../lib/api';
   import { flash, refreshPendingCount } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
@@ -11,6 +11,12 @@
   let profile: Profile | null = null;
   let facts: ProfileFact[] = [];
   let pending: PendingFact[] = [];
+
+  // The extra-keyword dictionary. Only approved terms live here; the proposer can only ever queue
+  // something for approval, which is what keeps scoring under the user's control.
+  let dictionary: SkillTerm[] = [];
+  let proposing = false;
+  let proposalNote = '';
 
   let voice = '';
   let preferences = '';
@@ -45,6 +51,43 @@
         location: profile.contact.location ?? '',
         links: profile.contact.links ?? ''
       };
+      // A missing dictionary is not a failure: this screen still works without one.
+      try {
+        dictionary = await api.get<SkillTerm[]>('/profile/dictionary');
+      } catch {
+        dictionary = [];
+      }
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    }
+  }
+
+  /**
+   * Looks for tools you use repeatedly that the built-in keyword list has never heard of. Anything it
+   * finds goes to the approval queue above, not into scoring: one mention is not a pattern, and a
+   * scoring list is not the place to guess.
+   */
+  async function proposeTerms() {
+    proposing = true;
+    try {
+      const result = await api.post<ProposeDictionaryResult>('/profile/dictionary/propose', { useModel: false });
+      proposalNote = result.queued.length > 0
+        ? `${result.queued.length} term${result.queued.length === 1 ? '' : 's'} waiting for your approval above.`
+        : 'Nothing new. Every tool you use repeatedly is already scored.';
+      await load();
+      await refreshPendingCount();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      proposing = false;
+    }
+  }
+
+  async function removeTerm(term: SkillTerm) {
+    try {
+      await api.del(`/profile/dictionary/${term.id}`);
+      await load();
+      flash(`"${term.term}" is out of the scoring dictionary.`);
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), 'error');
     }
@@ -289,6 +332,40 @@
   {/if}
 </section>
 
+<section class="block">
+  <Rule text="Scoring dictionary" note="{dictionary.length} extra term{dictionary.length === 1 ? '' : 's'}" />
+
+  <p class="note">
+    The built-in keyword list is fixed. Anything here is a term <em>you</em> approved, and it counts
+    towards match scores from that moment on. Nothing reaches this list without you saying yes.
+  </p>
+
+  <div class="add-row">
+    <button type="button" class="btn" on:click={proposeTerms} disabled={proposing}>
+      {proposing ? 'Reading your resumes…' : 'Find tools I keep using'}
+    </button>
+    {#if proposalNote}<span class="meta">{proposalNote}</span>{/if}
+  </div>
+
+  {#if dictionary.length === 0}
+    <Empty
+      title="No extra terms yet"
+      message="Match scores run on the built-in list alone until you approve something."
+      action="Press the button above after a couple of resumes are in. Anything that recurs goes to the approval queue, never straight in here."
+    />
+  {:else}
+    <ul class="dict-list">
+      {#each dictionary as term (term.id)}
+        <li>
+          <span class="fact-text">{term.term}</span>
+          <span class="meta">seen {term.occurrences} time{term.occurrences === 1 ? '' : 's'} &middot; via {term.origin}</span>
+          <button type="button" class="btn btn-ghost btn-sm" on:click={() => removeTerm(term)}>Remove</button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+</section>
+
 <section class="block inverted newsprint-texture">
   <div class="inner">
     <Rule text="Voice and contact" note="used in every written output" />
@@ -452,6 +529,20 @@
     font-family: var(--font-ui);
     font-size: 0.875rem;
     line-height: 1.45;
+  }
+
+  .dict-list {
+    list-style: none;
+    padding: 0;
+    margin: var(--s4) 0 0;
+  }
+
+  .dict-list li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s3);
+    padding: var(--s2) 0;
+    border-bottom: var(--hair-soft);
   }
 
   /* Inverted section: the one place the design flips to ink. */

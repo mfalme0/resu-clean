@@ -209,10 +209,25 @@ public sealed partial class SourceDetector
         }
     }
 
-    public static string Compose(string urlOrTemplate, string? query, string? location) =>
-        urlOrTemplate
+    public static string Compose(string urlOrTemplate, string? query, string? location, string? requiresKeyEnvVar = null)
+    {
+        var composed = urlOrTemplate
             .Replace("{query}", Uri.EscapeDataString(query ?? string.Empty))
             .Replace("{location}", Uri.EscapeDataString(location ?? string.Empty));
+
+        // Some providers embed the credential in the path (https://jooble.org/api/{key}). Substitute
+        // it from the source's own key variable so the seeded URL becomes usable the moment the user
+        // puts the key in .env. With no key the placeholder stays visible rather than turning into a
+        // request against a literal "{key}" path segment, which would fail with a confusing 404.
+        if (composed.Contains("{key}", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(requiresKeyEnvVar))
+        {
+            var key = Environment.GetEnvironmentVariable(requiresKeyEnvVar);
+            if (!string.IsNullOrWhiteSpace(key))
+                composed = composed.Replace("{key}", Uri.EscapeDataString(key));
+        }
+
+        return composed;
+    }
 
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max].TrimEnd() + "...";

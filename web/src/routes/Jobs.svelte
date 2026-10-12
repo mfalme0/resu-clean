@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, waitForOp, type DetectResult, type Job, type Paged, type SearchOutcome, type Source, type SourcePack, type TestResult, type ResumeSummary } from '../lib/api';
+  import { api, waitForOp, type DetectResult, type GapRamp, type InterviewPrep, type Job, type JobQuality, type JobRequirements, type Paged, type SearchOutcome, type Source, type SourcePack, type TestResult, type ResumeSummary } from '../lib/api';
   import { flash } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
@@ -23,6 +23,23 @@
   let jobs: Paged<Job> = { items: [], page: 1, size: 25, total: 0, pages: 0, hasMore: false };
   let jobsPage = 1;
 
+  // Requirement classification: what a posting demands, split by how closable it is.
+  let requirements: Record<string, JobRequirements> = {};
+  let readingJob = '';
+  let reranking = false;
+
+  // Posting quality: stale, mislabelled, and eligibility-capped. Loaded with the requirements
+  // because they answer the same question from different angles: is this worth your afternoon.
+  let quality: Record<string, JobQuality> = {};
+
+  // Interview prep and gap ramps are per-job and only fetched when asked for, since both can be
+  // slow and neither is needed to read a list.
+  let interview: Record<string, InterviewPrep> = {};
+  let interviewBusy = '';
+  let interviewError: Record<string, string> = {};
+  let ramps: Record<string, GapRamp> = {};
+  let rampBusy = '';
+
   // Manual save
   let manualTitle = '';
   let manualCompany = '';
@@ -40,6 +57,99 @@
   let detection: DetectResult | null = null;
   let detecting = false;
   let testResult: TestResult | null = null;
+
+/**
+   * Reads one posting and splits what it demands from what it merely mentions. Deterministic unless
+   * `fact_check`-style routing is set for `requirements`.
+   */
+  async function readRequirements(job: Job) {
+    if (requirements[job.id]) {
+      // Toggle off when it is already open.
+      const next = { ...requirements };
+      delete next[job.id];
+      requirements = next;
+      return;
+    }
+    readingJob = job.id;
+    try {
+      // Both are cheap and deterministic by default, so they come back together: a posting that is
+      // stale and blocked is one message, not two round trips.
+      const [report, check] = await Promise.all([
+        api.get<JobRequirements>(`/jobs/${job.id}/requirements`),
+        api.get<JobQuality>(`/jobs/${job.id}/quality`).catch(() => null)
+      ]);
+      requirements = { ...requirements, [job.id]: report };
+      if (check) quality = { ...quality, [job.id]: check };
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      readingJob = '';
+    }
+  }
+
+  /**
+   * Likely questions from this posting, tied to the claims on your best-fit resume that they will
+   * probe. The landmines are reported either way: a claim nothing in your profile backs is a
+   * question you do not want to be asked cold.
+   */
+  async function prepInterview(job: Job) {
+    if (interview[job.id]) {
+      const next = { ...interview };
+      delete next[job.id];
+      interview = next;
+      return;
+    }
+    interviewBusy = job.id;
+    try {
+      const report = await api.get<InterviewPrep>(`/jobs/${job.id}/interview`);
+      interview = { ...interview, [job.id]: report };
+    } catch (err) {
+      // The endpoint refuses without a best-fit version, which is a setup step rather than a
+      // failure, so it is said plainly instead of being swallowed.
+      const message = err instanceof Error ? err.message : String(err);
+      interviewError = { ...interviewError, [job.id]: message };
+      flash(message, 'error');
+    } finally {
+      interviewBusy = '';
+    }
+  }
+
+  /**
+   * A grounded route to closing one named gap. Every suggestion comes back citing a verified fact,
+   * so the button answers with what you already do rather than a shopping list of courses.
+   */
+  async function rampGap(jobId: string, requirement: JobRequirement) {
+    rampBusy = `${jobId}:${requirement.text}`;
+    try {
+      const report = await api.post<GapRamp>('/jobs/gap-ramp', {
+        requirement: requirement.text,
+        requirementClass: requirement.class,
+        missing: requirement.missing
+      });
+      ramps = { ...ramps, [requirement.text]: report };
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      rampBusy = '';
+    }
+  }
+
+  /**
+   * Re-reads every saved posting so the list can rank on what is winnable rather than on keyword
+   * overlap alone. Deterministic, so this costs no model calls however many postings there are.
+   */
+  async function rerankJobs() {
+    reranking = true;
+    try {
+      const result = await api.post<{ checkedJobs: number; unmetBlockers: number }>('/jobs/requirements/refresh', {});
+      await loadJobs(1);
+      flash(`Read ${result.checkedJobs} posting${result.checkedJobs === 1 ? '' : 's'}. ${result.unmetBlockers} unmet blocker${result.unmetBlockers === 1 ? '' : 's'} across them.`);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      reranking = false;
+    }
+  }
 
   onMount(async () => {
     await Promise.all([loadJobs(1), loadSources(), loadPacks()]);
@@ -345,6 +455,16 @@
         <button type="button" class="btn" on:click={() => (tab = 'Add a job')}>Save a job manually</button>
       </Empty>
     {:else}
+      <div class="list-tools">
+        <p class="note">
+          Ranked by what is winnable: a posting you can meet first, then one nobody has read yet,
+          then one carrying a blocker you do not have.
+        </p>
+        <button type="button" class="btn btn-sm" on:click={rerankJobs} disabled={reranking}>
+          {reranking ? 'Reading postings…' : 'Re-read every posting'}
+        </button>
+      </div>
+
       <table class="data">
         <thead>
           <tr>
@@ -352,6 +472,7 @@
             <th>Where</th>
             <th>Source</th>
             <th>Match</th>
+            <th>Fits?</th>
             <th>Posted</th>
             <th></th>
           </tr>
@@ -370,8 +491,29 @@
               <td>
                 <span class="match" class:high={job.matchPct >= 60}>{job.matchPct}%</span>
               </td>
+              <td>
+                {#if !job.requirementsChecked}
+                  <span class="badge">unread</span>
+                {:else if job.unmetBlockers > 0}
+                  <span class="badge badge-accent" title="A requirement you cannot satisfy yet">
+                    {job.unmetBlockers} blocker{job.unmetBlockers === 1 ? '' : 's'}
+                  </span>
+                {:else if job.unmetRequired > 0}
+                  <span class="badge">{job.unmetRequired} gap{job.unmetRequired === 1 ? '' : 's'}</span>
+                {:else}
+                  <span class="badge badge-pass">clear</span>
+                {/if}
+              </td>
               <td class="mono">{job.postedAt ?? '—'}</td>
               <td class="actions">
+                <button type="button" class="btn btn-sm" on:click={() => readRequirements(job)}
+                        disabled={readingJob === job.id}>
+                  {readingJob === job.id ? 'Reading…' : requirements[job.id] ? 'Hide' : 'What it asks'}
+                </button>
+                <button type="button" class="btn btn-sm" on:click={() => prepInterview(job)}
+                        disabled={interviewBusy === job.id}>
+                  {interviewBusy === job.id ? 'Reading…' : interview[job.id] ? 'Hide prep' : 'Prep'}
+                </button>
                 {#if job.url}
                   <a class="btn btn-sm" href={job.url} target="_blank" rel="noopener noreferrer">
                     Open
@@ -381,6 +523,145 @@
                 <button type="button" class="btn btn-sm" on:click={() => removeJob(job)}>Remove</button>
               </td>
             </tr>
+            {#if requirements[job.id] || interview[job.id]}
+              {@const report = requirements[job.id]}
+              {@const check = quality[job.id]}
+              <tr class="requirements-row">
+                <td colspan="7">
+                  <div class="requirements">
+                    {#if check && check.flags.length > 0}
+                      <div class="req-group">
+                        <span class="label">worth knowing first</span>
+                        <ul>
+                          {#each check.flags as flag (flag.kind + flag.detail)}
+                            <li class:unmet={flag.severity === 'warn'}>
+                              <span class="req-mark" aria-hidden="true">!</span>
+                              {flag.detail}
+                              {#if flag.quote}
+                                <span class="req-evidence">“{flag.quote}”</span>
+                              {/if}
+                            </li>
+                          {/each}
+                        </ul>
+                      </div>
+                    {/if}
+                    {#if report}
+                      {#each ['blocker', 'required', 'preferred', 'implicit'] as cls (cls)}
+                      {@const items = report.requirements.filter((r) => r.class === cls)}
+                      {#if items.length > 0}
+                        <div class="req-group">
+                          <span class="label">{cls}</span>
+                          <ul>
+                            {#each items as r (r.text)}
+                              <li class:unmet={!r.met}>
+                                <span class="req-mark" aria-hidden="true">{r.met ? '✓' : '·'}</span>
+                                {r.text}
+                                {#if !r.met && r.missing.length > 0}
+                                  <span class="req-missing">missing: {r.missing.join(', ')}</span>
+                                {/if}
+                                {#if r.evidence}
+                                  <span class="req-evidence">“{r.evidence}”</span>
+                                {/if}
+                                {#if !r.met}
+                                  <button
+                                    type="button"
+                                    class="btn btn-sm btn-ghost"
+                                    on:click={() => rampGap(job.id, r)}
+                                    disabled={rampBusy === `${job.id}:${r.text}`}
+                                  >
+                                    {rampBusy === `${job.id}:${r.text}` ? 'Thinking…' : 'How do I close this?'}
+                                  </button>
+                                  {#if ramps[r.text]}
+                                    {@const ramp = ramps[r.text]}
+                                    <div class="ramp">
+                                      {#if !ramp.closable}
+                                        <p class="meta">
+                                          Not something a weekend closes. It is a requirement of fact, not a skill.
+                                        </p>
+                                      {:else if ramp.suggestions.length === 0}
+                                        <p class="meta">
+                                          No suggestion, because nothing here is grounded in something you have
+                                          done. Approve a fact or two in Profile and this fills in.
+                                        </p>
+                                      {:else}
+                                        <ul>
+                                          {#each ramp.suggestions as s, i (i)}
+                                            <li>
+                                              {s.text}
+                                              <span class="req-evidence">builds on: “{s.buildsOnFactText}” — {s.why}</span>
+                                            </li>
+                                          {/each}
+                                        </ul>
+                                      {/if}
+                                      {#if ramp.nearestFact}
+                                        <p class="meta">
+                                          Closest thing you already do: “{ramp.nearestFact}”
+                                        </p>
+                                      {/if}
+                                    </div>
+                                  {/if}
+                                {/if}
+                              </li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                    {/each}
+                    {/if}
+                    <p class="meta">
+                      {#if report}
+                        {#if report.unmetBlockers > 0}
+                          {report.unmetBlockers} blocker{report.unmetBlockers === 1 ? '' : 's'} here cannot be closed by
+                          studying. The rest are skills, and those can be.
+                        {:else}
+                          Nothing here is a hard blocker.
+                        {/if}
+                        Read by the {report.method === 'model' ? `model${report.model ? ` (${report.model})` : ''}` : 'deterministic pass'}.
+                      {:else}
+                        Press “What it asks” to read what this posting demands.
+                      {/if}
+                    </p>
+
+                    {#if interviewError[job.id]}
+                      <p class="meta">{interviewError[job.id]}</p>
+                    {/if}
+                    {#if interview[job.id]}
+                      {@const prep = interview[job.id]}
+                      {#if prep.notes.length > 0}
+                        <div class="req-group">
+                          <span class="label">be ready to defend these</span>
+                          <ul>
+                            {#each prep.notes as note (note)}
+                              <li class="unmet">{note}</li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                      {#if prep.questions.length > 0}
+                        <div class="req-group">
+                          <span class="label">likely questions</span>
+                          <ul>
+                            {#each prep.questions as q, i (i)}
+                              <li>
+                                {q.text}
+                                <span class="req-evidence">
+                                  asks about “{q.groundedIn}”{q.risk && q.riskNote ? ` — ${q.riskNote}` : ''}
+                                </span>
+                              </li>
+                            {/each}
+                          </ul>
+                        </div>
+                      {/if}
+                      <p class="meta">
+                        {prep.questions.length === 0
+                          ? 'No questions written, but the claims above are the ones to have answers ready for.'
+                          : `Written by the ${prep.method === 'model' ? `model${prep.model ? ` (${prep.model})` : ''}` : 'deterministic pass'}, which only reads this posting and your best-fit resume.`}
+                      </p>
+                    {/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -768,6 +1049,84 @@
 
   .match.high {
     color: var(--pass);
+  }
+
+  .list-tools {
+    display: flex;
+    gap: var(--s4);
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-bottom: var(--s4);
+  }
+
+  .requirements-row td {
+    background: var(--paper-sunk, rgba(0, 0, 0, 0.03));
+  }
+
+  .requirements {
+    padding: var(--s3) 0;
+  }
+
+  .req-group {
+    margin-bottom: var(--s4);
+  }
+
+  .req-group ul {
+    list-style: none;
+    padding: 0;
+    margin: var(--s2) 0 0;
+    display: grid;
+    gap: var(--s1);
+  }
+
+  .req-group li {
+    display: flex;
+    gap: var(--s2);
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+  }
+
+  .req-mark {
+    color: var(--pass);
+    font-weight: 700;
+  }
+
+  .req-group li.unmet .req-mark {
+    color: var(--accent);
+  }
+
+  .req-missing {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+
+  .req-evidence {
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.8rem;
+  }
+
+  /* The ramp answer sits under the requirement it answers, so the citation is next to the claim. */
+  .ramp {
+    flex-basis: 100%;
+    padding: var(--s2) var(--s3);
+    border-left: 2px solid var(--rule);
+    background: var(--paper);
+  }
+
+  .ramp ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: var(--s2);
+  }
+
+  .ramp li {
+    font-size: 0.875rem;
   }
 
   .actions {

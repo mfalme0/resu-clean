@@ -61,5 +61,26 @@ public static class KitEndpoints
             Api.Guard(() => Task.FromResult(kits.DeleteTrackerEntry(id)
                 ? Api.Ok(new { deleted = true })
                 : Api.Error(StatusCodes.Status404NotFound, "not_found", $"No tracker entry called '{id}'."))));
+
+        // ---- Export / import -------------------------------------------------
+
+        /// <summary>
+        /// The whole tracker as one small JSON file: company slug -> stage, note and dates. It carries
+        /// no resume text, no job descriptions and no keys, so it is safe to keep in a notes file.
+        /// </summary>
+        group.MapGet("/export", (TrackerTransfer transfer) =>
+            Api.Guard(() => Task.FromResult(Results.Bytes(
+                System.Text.Encoding.UTF8.GetBytes(transfer.ExportJson()),
+                "application/json", "applications.json"))));
+
+        group.MapGet("/export-text", (TrackerTransfer transfer) =>
+            Api.Guard(() => Task.FromResult(Api.Ok(new { json = transfer.ExportJson() }))));
+
+        /// <summary>
+        /// Reads that file back in. Entries already tracked are left alone unless overwrite is set, so
+        /// re-importing an older file cannot silently reset work you have since moved forward.
+        /// </summary>
+        group.MapPost("/import", (ImportTrackerRequest body, TrackerTransfer transfer) =>
+            Api.Guard(() => Task.FromResult(Api.Ok(transfer.ImportJson(body.Json ?? "", body.Overwrite ?? false)))));
     }
 }

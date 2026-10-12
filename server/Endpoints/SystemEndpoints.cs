@@ -27,6 +27,16 @@ public static class SystemEndpoints
 
         group.MapGet("/metrics/mem", (OpRunner ops) => Api.Ok(ReadMemory(ops)));
 
+        /// <summary>
+        /// What the model calls have cost. The app tracks memory with the same care, and models are
+        /// the one resource in it with no natural ceiling.
+        /// </summary>
+        group.MapGet("/metrics/models", (ModelRouter router) => Api.Ok(new ModelUsageResponse(
+            router.UsageByWorkflow(), router.RecentUsage(50))));
+
+        group.MapDelete("/metrics/models", (ModelRouter router) =>
+            Api.Guard(() => { router.ClearUsage(); return Task.FromResult(Api.Ok(new { cleared = true })); }));
+
         group.MapGet("/ops/{id}", (string id, OpRunner ops) =>
             Api.Guard(() =>
             {
@@ -50,9 +60,24 @@ public static class SystemEndpoints
                 ["ats prioritised fixes"] = router.AnyConfigured("ats"),
                 ["tailor resume"] = router.AnyConfigured("update_resume"),
                 ["extract facts from text"] = router.AnyConfigured("profile"),
+                // Grounding and requirements both work without a model: the deterministic passes
+                // check unverified figures and classify by section and marker phrase. A route only
+                // adds claim-level citation and judgement.
+                ["check a resume against the verified profile"] = router.AnyConfigured("fact_check"),
+                ["classify job requirements"] = router.AnyConfigured("requirements"),
+                ["suggest a ramp to close a gap"] = router.AnyConfigured("gap_ramp"),
+                ["propose skill dictionary additions"] = router.AnyConfigured("dictionary"),
+                ["flag job posting problems"] = router.AnyConfigured("job_quality"),
+                ["predict interview questions"] = router.AnyConfigured("interview"),
                 ["job search"] = false,
                 ["application email"] = router.AnyConfigured("apply_email"),
-                ["template application email"] = false
+                ["template application email"] = false,
+                // Search needs a backend, but unlike the others a raw result list is always available
+                // once a search key exists, so this reports the model tier separately from the API.
+                ["web search (model)"] = router.AnyConfigured("web_search"),
+                ["web search (search API)"] =
+                    !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(Services.Search.WebSearchService.TavilyEnvVar))
+                    || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(Services.Search.WebSearchService.BraveEnvVar))
             };
             return Api.Ok(new CapabilitiesResponse(
                 providers.AnyConfigured(), needsModel, ModelRouter.Workflows,

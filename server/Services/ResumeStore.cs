@@ -114,6 +114,27 @@ public sealed class ResumeStore
         return Db.QueryOne(conn, "SELECT text FROM resume_versions WHERE id = @id", r => Db.Str(r, "text"), Db.P("@id", versionId));
     }
 
+    /// <summary>The resume a version belongs to, so a version-scoped route can add a sibling version.</summary>
+    /// <summary>
+    /// The version marked best-fit, or null. Deliberately does not fall back to "the newest" — a
+    /// caller that needs a resume to compare against should say so rather than silently grade the
+    /// wrong document.
+    /// </summary>
+    public string? BestFitVersionId()
+    {
+        using var conn = _db.Open();
+        return Db.QueryOne(conn,
+            "SELECT id FROM resume_versions WHERE best_fit = 1 ORDER BY created_at DESC LIMIT 1",
+            r => Db.Str(r, "id"));
+    }
+
+    public string? ResumeIdOf(string versionId)
+    {
+        using var conn = _db.Open();
+        return Db.QueryOne(conn, "SELECT resume_id FROM resume_versions WHERE id = @id",
+            r => Db.Str(r, "resume_id"), Db.P("@id", versionId));
+    }
+
     public bool DeleteResume(string id)
     {
         using var conn = _db.Open();

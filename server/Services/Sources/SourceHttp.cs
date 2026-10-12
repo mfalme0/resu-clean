@@ -157,13 +157,61 @@ public sealed class SourceHttp
     {
         if (uri is null) return new RobotsRules();
         var rules = await LoadRobotsAsync(uri, ct).ConfigureAwait(false);
-        var path = uri.PathAndQuery.TrimEnd('/');
-        path = string.IsNullOrEmpty(path) ? "/" : path;
-        var allowed = rules.AllowedPaths.Count == 0 || rules.AllowedPaths.Any(p => path.StartsWith(p, StringComparison.Ordinal));
-        if (allowed) return new RobotsRules();
+        var path = uri.PathAndQuery;
+        if (path.Length == 0) path = "/";
+        return Evaluate(rules.AllowedPaths, rules.DisallowedPaths, path);
+    }
 
-        var disallow = rules.DisallowedPaths.FirstOrDefault(p => path.StartsWith(p, StringComparison.Ordinal)) ?? "/";
+    /// <summary>
+    /// Applies a parsed robots rule set to a path. Pure and offline so the semantics can be pinned
+    /// by tests without touching the network.
+    ///
+    /// Longest match wins across BOTH lists and Allow wins a tie. An earlier version let any single
+    /// matching Allow unlock the whole host regardless of a longer Disallow, which meant a site
+    /// publishing "Allow: /jobs" next to "Disallow: /" was treated as fully fetchable.
+    /// </summary>
+    public static RobotsRules Evaluate(IReadOnlyList<string> allowed, IReadOnlyList<string> disallowed, string path)
+    {
+        var allow = LongestMatch(allowed, path);
+        var disallow = LongestMatch(disallowed, path);
+
+        if (disallow is null) return new RobotsRules();
+        if (allow is not null && allow.Length >= disallow.Length) return new RobotsRules();
         return new RobotsRules { Allowed = false, Reason = $"robots.txt disallows {disallow}" };
+    }
+
+    /// <summary>
+    /// Returns the matching rule with the greatest length, or null when nothing matches. Rules are
+    /// matched as prefix patterns with '*' as a wildcard and a trailing '$' anchoring the end.
+    /// </summary>
+    private static string? LongestMatch(IReadOnlyList<string> rules, string path)
+    {
+        string? best = null;
+        foreach (var rule in rules)
+        {
+            if (!Matches(rule, path)) continue;
+            if (best is null || rule.Length > best.Length) best = rule;
+        }
+        return best;
+    }
+
+    private static bool Matches(string rule, string path)
+    {
+        var anchored = rule.EndsWith('$');
+        if (anchored) rule = rule[..^1];
+
+        var pattern = new StringBuilder("^");
+        foreach (var ch in rule)
+        {
+            if (ch == '*') pattern.Append(".*");
+            else pattern.Append(System.Text.RegularExpressions.Regex.Escape(ch.ToString()));
+        }
+        if (anchored) pattern.Append('$');
+
+        return System.Text.RegularExpressions.Regex.IsMatch(
+            path, pattern.ToString(),
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(250));
     }
 
     private async Task<RobotsRules> LoadRobotsAsync(Uri uri, CancellationToken ct)
@@ -209,7 +257,7 @@ public sealed class SourceHttp
                         if (field == "disallow" && value.Length > 0) disallowed.Add(value);
                         else if (field == "allow" && value.Length > 0) allowed.Add(value);
                     }
-                    // Longest match wins.
+                    // Kept longest-first purely for readability; IsAllowedAsync does the real longest-match.
                     allowed.Sort((a, b) => b.Length.CompareTo(a.Length));
                     disallowed.Sort((a, b) => b.Length.CompareTo(a.Length));
                     rules = new RobotsRules() { AllowedPaths = allowed, DisallowedPaths = disallowed };
@@ -241,10 +289,13 @@ public sealed class SourceHttp
         BuildUrl(source.UrlTemplate ?? source.Url ?? string.Empty, query, location);
 }
 
-/// <summary>Minimal robots rule set (longest-match semantics, no full RFC implementation).</summary>
+/// <summary>
+/// Minimal robots rule set (longest-match semantics, no full RFC implementation).
+/// A default instance means "allowed"; a denial always carries a Reason.
+/// </summary>
 public sealed class RobotsRules
 {
-    public bool Allowed { get; init; }
+    public bool Allowed { get; init; } = true;
     public string Reason { get; init; } = string.Empty;
     public List<string> AllowedPaths { get; init; } = new();
     public List<string> DisallowedPaths { get; init; } = new();

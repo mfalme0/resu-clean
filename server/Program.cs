@@ -39,14 +39,32 @@ builder.Services.AddSingleton(provider => new Db(appConfig));
 builder.Services.AddSingleton<ResumeStore>();
 builder.Services.AddSingleton<ProfileService>();
 builder.Services.AddSingleton<ProviderService>();
-builder.Services.AddSingleton<ModelRouter>();
+builder.Services.AddSingleton(provider => new ModelRouter(provider.GetRequiredService<Db>(), provider.GetRequiredService<ProviderService>(), appConfig));
 builder.Services.AddSingleton<SourceRegistry>();
 builder.Services.AddSingleton<SourceHttp>();
 builder.Services.AddSingleton<SourceDetector>();
 builder.Services.AddSingleton<JobSearchService>();
 builder.Services.AddSingleton<ApplicationService>();
+builder.Services.AddSingleton<RewriteLedger>();
+builder.Services.AddSingleton<FactSupportService>();
+builder.Services.AddSingleton<RequirementsService>();
+builder.Services.AddSingleton<SkillDictionaryService>();
+builder.Services.AddSingleton<JobQualityService>();
+builder.Services.AddSingleton<GapRampService>();
+builder.Services.AddSingleton<InterviewService>();
+builder.Services.AddSingleton(provider => new TrackerTransfer(
+    provider.GetRequiredService<Db>(), provider.GetRequiredService<JobSearchService>()));
 builder.Services.AddSingleton<ResumeWorkflows>();
 builder.Services.AddSingleton<OpRunner>();
+builder.Services.AddSingleton<ResuClean.Services.Search.WebSearchService>();
+
+// Search vendors get their own named client so a slow or hostile endpoint cannot exhaust the
+// connection pool the job-source fetcher relies on.
+builder.Services.AddHttpClient("search", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("resu-clean/1.0 (self-hosted resume toolkit)");
+});
 
 // Response caching is deliberately NOT registered: resume bodies are large and personal.
 builder.Services.AddResponseCaching(options =>
@@ -55,6 +73,10 @@ builder.Services.AddResponseCaching(options =>
 });
 
 var app = builder.Build();
+
+// The approved dictionary is loaded into the scorer once, before the first request. Scoring reads
+// it on every ATS scan and every job ranking, so it must not be waiting on first use.
+app.Services.GetRequiredService<SkillDictionaryService>().Refresh();
 
 // ---- Auth ------------------------------------------------------------------
 // Only enforced when RESUCLEAN_API_KEY is set. Binds to localhost by default.
@@ -110,11 +132,20 @@ if (appConfig.Swagger)
             ["/api/sources/packs/all"] = new { get = "Seed packs you can install" },
             ["/api/jobs/search"] = new { post = "Search all enabled sources. Returns 202 + opId" },
             ["/api/jobs"] = new { get = "Saved jobs (paginated)", post = "Save a job manually by pasting text" },
+            ["/api/jobs/{id}/requirements"] = new { get = "What a posting demands, split by how closable it is" },
+            ["/api/jobs/{id}/quality"] = new { get = "Stale, mislabelled or eligibility-capped. A judgement flag always carries a quote" },
+            ["/api/jobs/{id}/interview"] = new { get = "Likely questions from this posting, plus the claims nothing backs" },
+            ["/api/jobs/gap-ramp"] = new { post = "A grounded route to closing one named gap. Every suggestion cites a verified fact" },
             ["/api/kits"] = new { post = "Generate an application kit. Returns 202 + opId" },
             ["/api/kits/{id}/download/{kind}"] = new { get = "kind = eml | zip | text | cover" },
             ["/api/tracker"] = new { get = "Application tracker (paginated)", post = "Add an entry", patch = "Update a status" },
+            ["/api/tracker/export"] = new { get = "The tracker as a file, so it survives a reinstall or a second machine" },
+            ["/api/tracker/import"] = new { post = "Merge an exported tracker file back in" },
             ["/api/providers"] = new { get = "Providers (keys are never returned)", post = "Add a provider" },
             ["/api/routes/{workflow}"] = new { get = "Ordered fallback list", put = "Replace the list" },
+            ["/api/search"] = new { post = "Web search with citations. Returns 202 + opId" },
+            ["/api/resumes/rewrites"] = new { get = "Accept rate per workflow and model: is a model pulling its weight?" },
+            ["/api/profile/dictionary"] = new { get = "Approved extra keywords", delete = "Remove one" },
             ["/api/ops/{id}"] = new { get = "Poll a long operation" },
             ["/api/capabilities"] = new { get = "Which features need a model" },
             ["/api/metrics/mem"] = new { get = "Live memory reading" }
@@ -130,6 +161,7 @@ ResumeEndpoints.Map(app);
 ProfileEndpoints.Map(app);
 SourceEndpoints.Map(app);
 JobEndpoints.Map(app);
+SearchEndpoints.Map(app);
 KitEndpoints.Map(app);
 KitEndpoints.MapTracker(app);
 ModelEndpoints.Map(app);

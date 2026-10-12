@@ -1,19 +1,49 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-import { api, type Provider, type Route, type ProviderPreset, type DiscoverModelsResult } from '../lib/api';
+import { onMount } from 'svelte';
+  import { api, type Provider, type Route, type ProviderPreset, type DiscoverModelsResult, type ModelUsage, type RewriteLedger } from '../lib/api';
   import { capabilities, flash, loadSystem, memory, refreshMemory } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import Notice from '../lib/ui/Notice.svelte';
   import Icon from '../lib/ui/Icon.svelte';
 
+  const WORKFLOW_GROUPS: { title: string; note: string; workflows: string[] }[] = [
+    {
+      title: 'Writing',
+      note: 'Produces text. Never accepts a rewrite it cannot measure.',
+      workflows: ['clean', 'update_resume', 'apply_email']
+    },
+    {
+      title: 'Verification',
+      note: 'Judges what exists. These are the workflows worth routing first.',
+      workflows: ['ats', 'fact_check', 'requirements']
+    },
+    {
+      title: 'Discovery',
+      note: 'Reads the outside world: postings and the web.',
+      workflows: ['find_jobs', 'web_search', 'job_quality', 'interview']
+    },
+    {
+      title: 'Profile',
+      note: 'Anything that would change your verified facts or your scoring.',
+      workflows: ['profile', 'gap_ramp', 'dictionary']
+    }
+  ];
+
   const WORKFLOW_NOTES: Record<string, string> = {
-    clean: 'The wording pass after the deterministic clean. Falls back to the deterministic result.',
+    clean: 'The wording pass after the deterministic clean. The rewrite is re-scored before you see it.',
     ats: 'Prioritised fixes from the rule scan. The score itself never needs a model.',
     profile: 'Extracting standalone facts from text so they can be queued for approval.',
     update_resume: 'Tailoring a resume to a posting, using only resume plus approved profile facts.',
     find_jobs: 'Optional: model-written search terms. Feed and API sources work without it.',
-    apply_email: 'Writing the application email. Falls back to the template email.'
+    apply_email: 'Writing the application email. Falls back to the template email.',
+    web_search: 'General web search. Uses the model’s own search tool, or a search API key, or returns raw results with no model at all.',
+    fact_check: 'Grounds each claim in your verified profile and cites the fact it came from. Works without a model; a route adds citation.',
+    requirements: 'Separates blockers from nice-to-haves in a posting, so you know which gaps are worth a weekend.',
+    gap_ramp: 'Suggests a way to close a named gap, grounded in something you already do.',
+    dictionary: 'Notices tools you use repeatedly that the keyword dictionary is missing, and proposes them for approval.',
+    job_quality: 'Compares a posting’s title against its description, and flags stale or eligibility-capped roles.',
+    interview: 'Likely questions from the actual posting, tied to the claims on your resume that they will probe.'
   };
 
   const WORKFLOWS = Object.keys(WORKFLOW_NOTES);
@@ -21,6 +51,8 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
   let providers: Provider[] = [];
   let routes: Route[] = [];
   let presets: ProviderPreset[] = [];
+  let usage: ModelUsage | null = null;
+  let ledger: RewriteLedger | null = null;
   let busy = new Set<string>();
   let testMessage: Record<string, string> = {};
   let refreshing = false;
@@ -63,7 +95,43 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
       }
       routeDraft = draft;
       routeTest = {};
-      await refreshMemory();
+      await Promise.all([refreshMemory(), loadUsage(), loadLedger()]);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    }
+  }
+
+  /**
+   * What the model calls have cost. Memory is tracked on this page because it used to be the only
+   * unbounded thing here; models are the other one.
+   */
+  async function loadUsage() {
+    try {
+      usage = await api.get<ModelUsage>('/metrics/models');
+    } catch {
+      usage = null;
+    }
+  }
+
+  /**
+   * Whether routing a workflow to a model is making the resume better or worse, counted rather than
+   * guessed. Every writing rewrite is re-scored before it reaches you; this is the record of what
+   * happened to those candidates, and it is the only honest answer to "is this model pulling its
+   * weight".
+   */
+  async function loadLedger() {
+    try {
+      ledger = await api.get<RewriteLedger>('/resumes/rewrites');
+    } catch {
+      ledger = null;
+    }
+  }
+
+  async function clearUsage() {
+    try {
+      await api.del('/metrics/models');
+      await loadUsage();
+      flash('Cleared the model usage log and the reply cache.');
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), 'error');
     }
@@ -526,16 +594,19 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
     <Rule text="How routing works" />
 
     <div class="steps">
-      {#each WORKFLOWS as workflow, index (workflow)}
-        <div class="step">
-          <span class="step-number">{String(index + 1).padStart(2, '0')}</span>
-          <h3 class="step-title">{workflow}</h3>
-          <p class="step-body">{WORKFLOW_NOTES[workflow]}</p>
-          <p class="step-meta">
-            {(routeDraft[workflow] ?? []).length} model{(routeDraft[workflow] ?? []).length === 1 ? '' : 's'} chosen &middot;
-            active: {routes.find((r) => r.workflow === workflow)?.activeModel ?? 'none'}
-          </p>
-        </div>
+      {#each WORKFLOW_GROUPS as group (group.title)}
+        <h3 class="group-title">{group.title}</h3>
+        <p class="group-note">{group.note}</p>
+        {#each group.workflows as workflow (workflow)}
+          <div class="step">
+            <h3 class="step-title">{workflow.replace('_', ' ')}</h3>
+            <p class="step-body">{WORKFLOW_NOTES[workflow]}</p>
+            <p class="step-meta">
+              {(routeDraft[workflow] ?? []).length} model{(routeDraft[workflow] ?? []).length === 1 ? '' : 's'} chosen &middot;
+              active: {routes.find((r) => r.workflow === workflow)?.activeModel ?? 'none'}
+            </p>
+          </div>
+        {/each}
       {/each}
     </div>
 
@@ -558,8 +629,11 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
       hint="Every workflow still works without a model, so this is optional."
     />
   {:else}
-    <div class="grid-rule route-grid">
-      {#each WORKFLOWS as workflow (workflow)}
+    {#each WORKFLOW_GROUPS as group (group.title)}
+      <h3 class="group-title route-group">{group.title}</h3>
+      <p class="group-note">{group.note}</p>
+      <div class="grid-rule route-grid">
+      {#each group.workflows as workflow (workflow)}
         {@const entries = routeDraft[workflow] ?? []}
         {@const saved = routes.find((r) => r.workflow === workflow)}
         <div class="cell route-cell">
@@ -675,7 +749,8 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
           </div>
         </div>
       {/each}
-    </div>
+      </div>
+    {/each}
 
     <p class="meta" style="margin-top: var(--s4)">
       Add as many rows as you like. The first one is tried first; if it fails the router falls through to the
@@ -714,6 +789,123 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
     Live figures come from <span class="mono">GET /api/metrics/mem</span>. The same numbers are printed by
     <span class="mono">npm run mem</span>.
   </p>
+</section>
+
+<section class="block">
+  <Rule text="What the models cost" note="tokens, calls, cache hits" />
+
+  {#if !usage || usage.recent.length === 0}
+    <Empty
+      title="No model calls yet"
+      message="Nothing has been sent to a model since the log was last cleared. Every deterministic feature works without one."
+    />
+  {:else}
+    <div class="grid-rule stats">
+      <div class="cell">
+        <span class="label">Calls logged</span>
+        <div class="stat-figure">{usage.byWorkflow.reduce((n, r) => n + r.calls, 0)}</div>
+        <p class="meta">Across {usage.byWorkflow.length} workflow{usage.byWorkflow.length === 1 ? '' : 's'}</p>
+      </div>
+      <div class="cell">
+        <span class="label">Served from cache</span>
+        <div class="stat-figure">
+          {usage.byWorkflow.reduce((n, r) => n + r.cachedCalls, 0)}
+        </div>
+        <p class="meta">No second call for an identical question</p>
+      </div>
+      <div class="cell">
+        <span class="label">Total tokens</span>
+        <div class="stat-figure">{usage.byWorkflow.reduce((n, r) => n + r.tokens, 0).toLocaleString()}</div>
+        <p class="meta">Prompt and completion combined</p>
+      </div>
+    </div>
+
+    <table class="usage">
+      <thead>
+        <tr><th>Workflow</th><th>Calls</th><th>Cached</th><th>Tokens</th><th>Avg</th></tr>
+      </thead>
+      <tbody>
+        {#each usage.byWorkflow as row (row.workflow)}
+          <tr>
+            <td class="mono">{row.workflow}</td>
+            <td>{row.calls}</td>
+            <td>{row.cachedCalls}</td>
+            <td>{row.tokens.toLocaleString()}</td>
+            <td>{row.avgMs} ms</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+
+    <p class="meta" style="margin-top: var(--s3)">
+      A reply is cached by content hash and reused only when the workflow, the prompt and the model
+      all match exactly. Set <span class="mono">RESUCLEAN_CACHE_TTL_SECONDS=0</span> to turn caching off.
+    </p>
+    <button class="btn" on:click={clearUsage}>Clear the log and the cache</button>
+  {/if}
+</section>
+
+<section class="block">
+  <Rule text="Were the rewrites any good?" note="accept rate per model" />
+
+  {#if !ledger || ledger.rows.length === 0}
+    <Empty
+      title="No rewrites measured yet"
+      message="Nothing has been through the rewrite gate. Clean or tailor a resume with a model configured and the record starts here."
+      action="Until then, treat a model's output as a draft rather than an improvement."
+    />
+  {:else}
+    <table class="usage">
+      <thead>
+        <tr><th>Workflow</th><th>Model</th><th>Rewrites</th><th>Accepted</th><th>Average score change</th></tr>
+      </thead>
+      <tbody>
+        {#each ledger.rows as row (row.workflow + row.model)}
+          <tr>
+            <td class="mono">{row.workflow}</td>
+            <td class="mono">{row.model}</td>
+            <td>{row.total}</td>
+            <td>
+              {row.accepted} of {row.total}
+              <span class="meta">({row.total === 0 ? 0 : Math.round((row.accepted / row.total) * 100)}%)</span>
+            </td>
+            <td class="mono">{row.avgDelta > 0 ? '+' : ''}{row.avgDelta}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+
+    {#if ledger.recent.length > 0}
+      <details style="margin-top: var(--s4)">
+        <summary class="meta">The last {ledger.recent.length} decisions</summary>
+        <table class="usage">
+          <thead>
+            <tr><th>When</th><th>Workflow</th><th>Model</th><th>Verdict</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            {#each ledger.recent as row (row.id)}
+              <tr>
+                <td class="mono">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
+                <td class="mono">{row.workflow}</td>
+                <td class="mono">{row.model}</td>
+                <td>
+                  <span class="badge" class:badge-pass={row.accepted} class:badge-accent={!row.accepted}>
+                    {row.accepted ? 'kept' : 'refused'}
+                  </span>
+                </td>
+                <td class="meta">{row.reason}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </details>
+    {/if}
+
+    <p class="meta" style="margin-top: var(--s3)">
+      A refused rewrite is not a deleted one. The Resume screen offers it back, so the gate is a
+      recommendation you can overrule rather than a veto.
+    </p>
+  {/if}
 </section>
 
 <section class="block">
@@ -1038,6 +1230,48 @@ import { api, type Provider, type Route, type ProviderPreset, type DiscoverModel
 
   .cell {
     padding: var(--s5);
+  }
+
+  .group-title {
+    font-family: var(--font-display);
+    font-size: 1.5rem;
+    margin-top: var(--s5);
+    margin-bottom: var(--s1);
+  }
+
+  .group-note {
+    margin-bottom: var(--s4);
+    opacity: 0.75;
+  }
+
+  .route-group {
+    margin-top: var(--s6);
+  }
+
+  .usage {
+    width: 100%;
+    margin-top: var(--s4);
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .usage th,
+  .usage td {
+    text-align: left;
+    padding: var(--s2) var(--s3);
+    border-bottom: 1px solid var(--rule, currentColor);
+  }
+
+  .usage th {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .usage td:not(:first-child) {
+    text-align: right;
   }
 
   .stat-figure {

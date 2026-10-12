@@ -230,7 +230,13 @@ public sealed class ProfileService
 
     // ---- Reference block for prompts ---------------------------------------
 
-    public string BuildReference()
+    /// <summary>
+    /// The block of text that goes into every prompt as the only source of truth.
+    ///
+    /// Each fact carries its id, because verification needs citations: a model asked to ground a
+    /// claim has to be able to name the fact it came from, and there is nothing to name without this.
+    /// </summary>
+    public string BuildReference(bool withIds = true)
     {
         var profile = GetProfile();
         var facts = ListFacts();
@@ -242,11 +248,14 @@ public sealed class ProfileService
         if (facts.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("VERIFIED FACTS (the only facts you may assert):");
+            sb.AppendLine(withIds
+                ? "VERIFIED FACTS (the only facts you may assert; cite the id in brackets when you use one):"
+                : "VERIFIED FACTS (the only facts you may assert):");
             foreach (var group in facts.GroupBy(f => f.Kind).OrderBy(g => g.Key))
             {
                 sb.AppendLine($"- {group.Key}:");
-                foreach (var fact in group) sb.AppendLine($"  * {fact.Text}");
+                foreach (var fact in group)
+                    sb.AppendLine(withIds ? $"  * [{fact.Id}] {fact.Text}" : $"  * {fact.Text}");
             }
         }
         return sb.ToString().Trim();

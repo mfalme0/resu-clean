@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Paged, type TrackerEntry } from '../lib/api';
+  import { api, type Paged, type TrackerEntry, type TrackerImportResult } from '../lib/api';
   import { flash } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
@@ -20,7 +20,48 @@
   let page = 1;
   let editing = new Map<string, string>();
 
+  // Export / import
+  let importOpen = false;
+  let importText = '';
+  let overwrite = false;
+  let importResult: TrackerImportResult | null = null;
+
   onMount(() => load(1));
+
+  /**
+   * The whole tracker as one small JSON file. It carries stages, notes and dates only — no resume
+   * text, no job descriptions, no keys — so it is safe to keep alongside your notes.
+   */
+  async function exportJson() {
+    try {
+      const res = await fetch('/api/tracker/export', {
+        headers: (await import('../lib/api')).hasApiKey() ? { 'X-API-Key': localStorage.getItem('resu-clean.apiKey') ?? '' } : {}
+      });
+      if (!res.ok) throw new Error('Export failed. Check the server log.');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'applications.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
+      flash('Exported the tracker to applications.json.');
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    }
+  }
+
+  async function importJson() {
+    if (importText.trim().length === 0) return;
+    try {
+      importResult = await api.post<TrackerImportResult>('/tracker/import', { json: importText, overwrite });
+      importText = '';
+      await load(1);
+      flash(`Imported ${importResult.imported} application${importResult.imported === 1 ? '' : 's'}.`);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    }
+  }
 
   async function load(next: number) {
     try {
@@ -104,6 +145,50 @@
 
 <section class="block">
   <Rule text="Applications" note="{entries.total} tracked" />
+
+  <div class="transfer">
+    <p class="meta">
+      The tracker moves as one JSON file, so you can keep it in your notes and read it without this tool.
+    </p>
+    <div class="transfer-actions">
+      <button type="button" class="btn" on:click={exportJson}>Export applications.json</button>
+      <button type="button" class="btn" on:click={() => { importOpen = !importOpen; importResult = null; }}>
+        {importOpen ? 'Close import' : 'Import…'}
+      </button>
+    </div>
+  </div>
+
+  {#if importOpen}
+    <div class="panel">
+      <label class="label" for="import-json">Paste the exported file</label>
+      <textarea
+        id="import-json"
+        class="textarea mono-area"
+        bind:value={importText}
+        placeholder={'{\n  "mkopa": { "stage": "applied", "note": "", "applied": "2026-10-11", "updated": "2026-10-11" },\n  "zeno":   { "stage": "todo",     "note": "", "applied": "", "updated": "" }\n}'}
+      ></textarea>
+      <label class="check">
+        <input type="checkbox" bind:checked={overwrite} />
+        <span>Overwrite entries that are already tracked</span>
+      </label>
+      <p class="meta">
+        Off by default, so importing an older file cannot quietly undo applications you have since
+        moved forward. Companies not already in your Jobs list are added as manual entries.
+      </p>
+      <button type="button" class="btn" on:click={importJson} disabled={importText.trim().length === 0}>Import</button>
+    </div>
+
+    {#if importResult}
+      <Notice
+        tone="info"
+        title="{importResult.imported} imported: {importResult.created} new, {importResult.updated} updated"
+        message={importResult.skipped.length > 0
+          ? 'Left alone: ' + importResult.skipped.join('; ')
+          : 'Every entry in the file is now tracked.'}
+        hint={importResult.skipped.length > 0 ? 'Tick the overwrite box to replace entries that already exist.' : undefined}
+      />
+    {/if}
+  {/if}
 
   <div class="tally">
     {#each counts as item (item.status)}
@@ -266,6 +351,39 @@
   .list {
     display: grid;
     gap: var(--s4);
+  }
+
+  .transfer {
+    margin-bottom: var(--s4);
+  }
+
+  .transfer-actions {
+    display: flex;
+    gap: var(--s2);
+    flex-wrap: wrap;
+    margin-top: var(--s2);
+  }
+
+  .panel {
+    border: var(--hair);
+    border-left: var(--rule-heavy);
+    padding: var(--s5);
+    margin-bottom: var(--s5);
+    display: grid;
+    gap: var(--s3);
+  }
+
+  .mono-area {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    min-height: 12rem;
+  }
+
+  .check {
+    display: flex;
+    gap: var(--s2);
+    align-items: center;
+    font-size: 0.9rem;
   }
 
   .entry {

@@ -74,8 +74,10 @@ fetch; a failure there never blocks the save.
 
 ## Routing and fallback
 
-Each of six workflows (`clean`, `ats`, `profile`, `update_resume`, `find_jobs`, `apply_email`) has an
-**ordered list** of `{provider, model}` pairs. On a call:
+Each of thirteen workflows has an **ordered list** of `{provider, model}` pairs, grouped on the
+screen by what the workflow is for — writing (`clean`, `update_resume`, `apply_email`), verification
+(`ats`, `fact_check`, `requirements`), discovery (`find_jobs`, `web_search`, `job_quality`,
+`interview`) and profile (`profile`, `gap_ramp`, `dictionary`). On a call:
 
 1. Try the first entry.
 2. If it is missing a key, disabled, removed, the model name is empty, or the provider returns an
@@ -88,6 +90,46 @@ Each of six workflows (`clean`, `ats`, `profile`, `update_resume`, `find_jobs`, 
 
 Fallback is per workflow, so you can send `clean` to a cheap fast model and `update_resume` to a
 stronger one, each with their own fallback chain.
+
+## Native web search
+
+`web_search` is the only workflow that can ask the provider to search the web as part of the call.
+Two wire formats are supported:
+
+| Provider type | Mechanism |
+|---|---|
+| `openai` | `web_search_options` on the chat completions request |
+| `anthropic` | `tools: [{ type: "web_search_20250305", max_uses: 5 }]` |
+
+The Anthropic tool is bounded to five searches per call so one query cannot become an unbounded bill.
+Both are opt-in: a workflow only sends the search field when it asks for it, so no existing workflow's
+payload changes.
+
+Not every model on a given provider implements the tool. A model can accept the request and reply
+from memory instead, so the reply carries `UsedNativeSearch` and the Search screen says which tier
+actually produced the answer. Citations are parsed out of the response where the provider supplies
+them (`url_citation` annotations for OpenAI, citation blocks for Anthropic).
+
+`web_search` is the one workflow whose output is **not** passed through `ResumeWorkflows.Validate`.
+That guard discards any number or date absent from the input, and search results consist of exactly
+those. Search output is quoted with its source URLs instead, and never touches the profile.
+
+## The rewrite gate and the ledger
+
+A model that produces text is the one place a wrong answer can reach your resume, so the writing
+workflows do not show you their output directly. Each rewrite candidate is:
+
+1. passed through the no-fabrication guard above,
+2. **re-scored against the same baseline** the deterministic version produced — ATS score and keyword
+   coverage,
+3. **kept only if it does not lose**. A candidate that scores worse is discarded, not shown.
+
+The measurement is a recommendation, not a veto: the discarded text is stored and offered back on
+the Resume screen, and keeping it saves it as a new version like any other edit.
+
+`GET /api/resumes/rewrites` is the running record — per workflow and model, how many candidates were
+kept and the average score change. That is the only honest answer to "is this model pulling its
+weight", because it is counted rather than felt.
 
 ```
 clean          1. groq/llama-3.3-70b-versatile

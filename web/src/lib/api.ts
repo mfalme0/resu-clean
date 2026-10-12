@@ -3,6 +3,12 @@
  *
  * One place that knows about: the base path, the optional X-API-Key header, the
  * standard error envelope, and the 202 + opId polling pattern.
+ *
+ * One convention worth knowing before reading the types below: the server omits null
+ * properties rather than serialising them, so `string | null` in a type here means
+ * "absent when there is nothing". Every consumer either tests truthiness or renders
+ * the value directly, so the two behave identically — but nothing may rely on the key
+ * being present.
  */
 
 const BASE = '/api';
@@ -196,6 +202,20 @@ export interface CleanChange {
   count: number;
 }
 
+/**
+ * How a model rewrite was judged. The rejected text comes back with it, because a gate that only
+ * says "no" leaves the user with nothing to do about it.
+ */
+export interface RewriteOutcome {
+  accepted: boolean;
+  baselineScore: number;
+  candidateScore: number;
+  baselineMissing: number;
+  candidateMissing: number;
+  reason: string;
+  rejectedText: string | null;
+}
+
 export interface CleanResult {
   versionId: string;
   text: string;
@@ -203,6 +223,7 @@ export interface CleanResult {
   model: string | null;
   changes: CleanChange[];
   warnings: string[];
+  rewrite: RewriteOutcome | null;
 }
 
 export interface AtsCheck {
@@ -249,6 +270,73 @@ export interface PendingFact {
   decidedAt: string | null;
 }
 
+// ---- Grounding ---------------------------------------------------------
+
+/** One claim the resume makes, and whether a verified fact backs it. */
+export interface FactClaim {
+  text: string;
+  category: string;
+  factIds: string[];
+  grounded: boolean;
+  note: string;
+}
+
+export interface FactCheckReport {
+  versionId: string;
+  checked: number;
+  grounded: number;
+  ungrounded: number;
+  claims: FactClaim[];
+  usedModel: boolean;
+  model: string | null;
+  /** "model" or "deterministic", so the screen never implies more was checked than was. */
+  method: 'model' | 'deterministic';
+  queued: PendingFact[];
+}
+
+/** One approved extra keyword. Added only through the approval queue, never by the tool itself. */
+export interface SkillTerm {
+  id: string;
+  term: string;
+  normalized: string;
+  occurrences: number;
+  origin: string;
+  createdAt: string;
+}
+
+export interface ProposeDictionaryResult {
+  queued: PendingFact[];
+  proposed: number;
+}
+
+/** One model rewrite, measured before it was shown and kept or discarded after. */
+export interface RewriteEvaluation {
+  id: string;
+  workflow: string;
+  model: string;
+  baselineScore: number;
+  candidateScore: number;
+  baselineMissing: number;
+  candidateMissing: number;
+  accepted: boolean;
+  reason: string;
+  createdAt: string;
+}
+
+/** Per workflow and model: how often a rewrite survived its own gate. */
+export interface RewriteLedgerRow {
+  workflow: string;
+  model: string;
+  total: number;
+  accepted: number;
+  avgDelta: number;
+}
+
+export interface RewriteLedger {
+  rows: RewriteLedgerRow[];
+  recent: RewriteEvaluation[];
+}
+
 export interface UpdateResult {
   versionId: string | null;
   text: string;
@@ -257,6 +345,7 @@ export interface UpdateResult {
   pending: PendingFact[];
   blockedByPending: boolean;
   notes: string[];
+  rewrite: RewriteOutcome | null;
 }
 
 export interface Profile {
@@ -361,6 +450,87 @@ export interface Job {
   isManual: boolean;
   bestVersionId: string | null;
   createdAt: string;
+  /** Blockers the posting states that nothing in your profile covers. */
+  unmetBlockers: number;
+  unmetRequired: number;
+  /** False until the posting has been read. Unchecked is not the same as clear. */
+  requirementsChecked: boolean;
+}
+
+export interface JobRequirement {
+  text: string;
+  class: 'blocker' | 'required' | 'preferred' | 'implicit';
+  met: boolean;
+  missing: string[];
+  evidence: string | null;
+}
+
+export interface JobRequirements {
+  jobId: string;
+  requirements: JobRequirement[];
+  unmetBlockers: number;
+  unmetRequired: number;
+  usedModel: boolean;
+  model: string | null;
+  method: 'model' | 'deterministic' | 'stored';
+}
+
+export interface JobFlag {
+  kind: string;
+  severity: 'info' | 'warn';
+  detail: string;
+  /** The posting's own words, when the flag is a judgement. Null for pure arithmetic. */
+  quote: string | null;
+}
+
+export interface JobQuality {
+  jobId: string;
+  flags: JobFlag[];
+  hasWarnings: boolean;
+  usedModel: boolean;
+  method: 'model' | 'deterministic';
+}
+
+export interface GapSuggestion {
+  text: string;
+  /** The verified fact this builds on. Never empty: an uncited suggestion is discarded server-side. */
+  buildsOnFactId: string;
+  buildsOnFactText: string;
+  why: string;
+}
+
+export interface GapRamp {
+  requirement: string;
+  class: string;
+  missing: string[];
+  suggestions: GapSuggestion[];
+  /** The closest verified fact to the gap, whether or not a model was available. */
+  nearestFact: string | null;
+  /** False for gaps this week cannot close, such as a years requirement. */
+  closable: boolean;
+  usedModel: boolean;
+  method: 'model' | 'deterministic';
+}
+
+export interface InterviewQuestion {
+  text: string;
+  /** What in the posting prompted this question. */
+  probes: string;
+  /** The resume or posting phrase it is anchored to. */
+  groundedIn: string;
+  risk: boolean;
+  riskNote: string;
+}
+
+export interface InterviewPrep {
+  jobId: string;
+  versionId: string;
+  questions: InterviewQuestion[];
+  usedModel: boolean;
+  model: string | null;
+  method: 'model' | 'deterministic';
+  /** Claims on the resume that nothing in the profile backs. Always present, model or not. */
+  notes: string[];
 }
 
 export interface SearchSummary {
@@ -380,6 +550,31 @@ export interface SearchSummary {
 export interface SearchOutcome {
   summary: SearchSummary;
   jobs: Job[];
+}
+
+export interface SearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+}
+
+export interface SearchAnswer {
+  answer: string;
+  results: SearchHit[];
+  /** Which backend answered: native | api+model | api | none. */
+  tier: string;
+  usedModel: boolean;
+  provider: string | null;
+  model: string | null;
+  notes: string[];
+}
+
+export interface SearchCapabilities {
+  nativeConfigured: boolean;
+  searchApiConfigured: boolean;
+  searchApiName: string | null;
+  canSearch: boolean;
 }
 
 export interface Kit {
@@ -491,6 +686,38 @@ export interface Health {
   status: string;
   version: string;
   uptimeSeconds: number;
+}
+
+/** What one tracker import did, including every entry it deliberately left alone. */
+export interface TrackerImportResult {
+  imported: number;
+  created: number;
+  updated: number;
+  skipped: string[];
+}
+
+/** What the model calls have cost, per workflow and in total. */
+export interface ModelUsageSummaryRow {
+  workflow: string;
+  calls: number;
+  cachedCalls: number;
+  tokens: number;
+  avgMs: number;
+}
+
+export interface ModelUsage {
+  byWorkflow: ModelUsageSummaryRow[];
+  recent: {
+    id: string;
+    workflow: string;
+    provider: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    cached: boolean;
+    elapsedMs: number;
+    createdAt: string;
+  }[];
 }
 
 // ---- Polling for long operations -------------------------------------------

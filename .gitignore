@@ -3,8 +3,11 @@
 *.local
 
 # data (db, generated documents, uploads)
-data/
-data-*/
+# Root-anchored on purpose. A bare "data/" also matches server/Data/ on a case-insensitive
+# filesystem, which silently untracked Db.cs and Schema.sql — the app cannot compile or start
+# without them.
+/data/
+/data-*/
 *.db
 *.db-shm
 *.db-wal

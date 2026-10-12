@@ -13,12 +13,37 @@ public sealed class ResumeWorkflows
     private readonly Db _db;
     private readonly ProfileService _profile;
     private readonly ModelRouter _router;
+    private readonly RewriteLedger _ledger;
 
-    public ResumeWorkflows(Db db, ProfileService profile, ModelRouter router)
+    public ResumeWorkflows(Db db, ProfileService profile, ModelRouter router, RewriteLedger ledger)
     {
         _db = db;
         _profile = profile;
         _router = router;
+        _ledger = ledger;
+    }
+
+    /// <summary>
+    /// Measures a model rewrite against the text it was meant to improve, and records the verdict.
+    /// Returns the text to actually use: the rewrite if it earned its place, the baseline if not.
+    /// </summary>
+    private (string Text, RewriteOutcome Outcome) ApplyGate(
+        string workflow,
+        ModelRouter.RoutedResult routed,
+        string versionId,
+        string baselineText,
+        string candidateText,
+        string? jobDescription)
+    {
+        var decision = RewriteGate.Evaluate(baselineText, candidateText, jobDescription);
+        _ledger.Record(workflow, routed, versionId, decision);
+
+        var outcome = new RewriteOutcome(
+            decision.Accepted, decision.BaselineScore, decision.CandidateScore,
+            decision.BaselineMissing, decision.CandidateMissing, decision.Reason,
+            decision.Accepted ? null : decision.CandidateText);
+
+        return (decision.Accepted ? candidateText : baselineText, outcome);
     }
 
     private sealed record VersionRow(string ResumeId, string Label, string Text);
@@ -68,10 +93,20 @@ public sealed class ResumeWorkflows
         warnings.AddRange(validated.Notes);
         warnings.AddRange(notes);
 
+        if (validated.Text.Length == 0)
+        {
+            return new CleanOutcome(
+                new CleanResult(versionId, deterministic.Text, true, routed.Model, Changes(deterministic), warnings),
+                SaveVersion(version.ResumeId, versionId, "Cleaned", deterministic.Text, "clean"));
+        }
+
+        // Close the loop: the rewrite is only offered if measuring it says it is an improvement.
+        var (chosen, outcome) = ApplyGate("clean", routed, versionId, deterministic.Text, validated.Text, null);
+        warnings.Add(outcome.Reason);
+
         return new CleanOutcome(
-            new CleanResult(versionId, validated.Text.Length > 0 ? validated.Text : deterministic.Text, true, routed.Model,
-                Changes(deterministic), warnings),
-            SaveVersion(version.ResumeId, versionId, "Cleaned", validated.Text.Length > 0 ? validated.Text : deterministic.Text, "clean"));
+            new CleanResult(versionId, chosen, outcome.Accepted, routed.Model, Changes(deterministic), warnings, outcome),
+            SaveVersion(version.ResumeId, versionId, "Cleaned", chosen, "clean"));
     }
 
     private static IReadOnlyList<CleanChange> Changes(Cleaner.Result result) =>
@@ -209,9 +244,20 @@ public sealed class ResumeWorkflows
         notes.AddRange(validated.Notes);
         notes.Add("Only facts from your resume and approved profile were used.");
 
+        if (validated.Text.Length == 0)
+        {
+            return new UpdateResumeResponse(
+                null, version.Text, true, routed.Model, pending, false,
+                notes.Append("The rewrite was rejected by the fabrication guard, so nothing was changed.").ToList());
+        }
+
+        // The tailoring target is the posting, so keyword coverage is part of the verdict here.
+        var (chosen, outcome) = ApplyGate("update_resume", routed, versionId, version.Text, validated.Text, request.JobDescription);
+        notes.Add(outcome.Reason);
+
         return new UpdateResumeResponse(
-            SaveVersion(version.ResumeId, versionId, "Tailored", validated.Text, "update_resume"),
-            validated.Text, true, routed.Model, pending, false, notes);
+            SaveVersion(version.ResumeId, versionId, "Tailored", chosen, "update_resume"),
+            chosen, true, routed.Model, pending, false, notes, outcome);
     }
 
     private async Task<List<PendingFactDto>> ExtractNewFactsAsync(string resumeText, string? jobDescription, string instruction, List<string> notes, CancellationToken ct)

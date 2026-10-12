@@ -36,7 +36,7 @@ public static partial class Keywords
         "google cloud","docker","kubernetes","terraform","ansible","jenkins","ci/cd","github actions","git","linux",
         "unix","bash","python","java","c#",".net","dotnet","javascript","typescript","node.js","node","react","vue",
         "angular","svelte","sveltekit","html","css","sass","tailwind","rest","rest api","graphql","apis","microservices",
-        "etl","ssis","sap","erp","crm","salesforce","hubspot","seo","sem","google analytics","ga4","hubspot",
+        "etl","ssis","sap","erp","crm","salesforce","hubspot","seo","sem","google analytics","ga4",
         "figma","sketch","adobe","photoshop","illustrator","canva","wireframes","prototyping","user research",
         "ux","ui","ui/ux","accessibility","wcag","design systems","graphic design","copywriting","content strategy",
         "project management","agile","scrum","kanban","jira","confluence","stakeholder management","budgeting",
@@ -46,11 +46,53 @@ public static partial class Keywords
         "training","mentoring","coaching","onboarding","recruitment","talent acquisition","performance management",
         "laboratory","clinical","phlebotomy","patient care","nursing","diagnostics","fmcg","manufacturing",
         "mechanical","electrical","engineering","cad","autocad","plc","maintenance","hvac","wiring",
-        "government","public sector","procurement","tender","donor","grants","sampling","monitoring",
-        "kotlin","swift","flutter","dart","laravel","django","flask","symfony","codeigniter","r","matlab",
+        "government","public sector","tender","donor","grants","sampling",
+        "kotlin","swift","flutter","dart","laravel","django","flask","symfony","codeigniter","matlab",
         "statistics","regression","classification","nlp","computer vision","pandas","numpy","scikit-learn","pytorch",
         "tensorflow","keras","llm","prompt engineering"
     };
+
+    /// <summary>
+    /// Terms approved from the proposed-additions queue, merged into the dictionary at match time.
+    ///
+    /// A static because <see cref="Keywords"/> is used statically from scoring, job ranking and the
+    /// prompt builders, and threading a list through all of those would touch more code than the
+    /// feature is worth. It is a volatile reference to an immutable array, so a reader either sees
+    /// the old set or the new one and never a half-updated list. Cleared per test host so one test's
+    /// dictionary cannot change another test's score.
+    /// </summary>
+    private static volatile string[] _extraSkills = Array.Empty<string>();
+
+    public static void SetExtraSkills(IEnumerable<string> terms)
+    {
+        // Only terms the dictionary would actually match: anything shorter than the token floor or
+        // longer than a token is dropped, which is what keeps "r" and "qa" from matching "quality"
+        // and "build" through the substring path.
+        _extraSkills = terms
+            .Select(t => (t ?? "").Trim().ToLowerInvariant())
+            .Where(t => t.Length is >= 3 and <= 24)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public static IReadOnlyList<string> ExtraSkills => _extraSkills;
+
+    /// <summary>
+    /// The built-in skill list, exposed so the dictionary proposer can tell what it already knows
+    /// without keeping a second copy of the array that would drift from this one.
+    /// </summary>
+    public static IReadOnlyList<string> KnownSkillTerms() => SkillDictionary;
+
+    /// <summary>Every dictionary entry: the built-in list plus anything approved.</summary>
+    private static IEnumerable<string> AllDictionaryEntries()
+    {
+        foreach (var skill in SkillDictionary) yield return skill;
+        foreach (var skill in _extraSkills)
+        {
+            // Approved terms never shadow a built-in entry.
+            if (Array.IndexOf(SkillDictionary, skill) < 0) yield return skill;
+        }
+    }
 
     /// <summary>Extracts ranked keywords from free text.</summary>
     public static List<string> Extract(string text, int max = 40)
@@ -61,9 +103,9 @@ public static partial class Keywords
         var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         // Multi-word skills first: they win over their component words.
-        foreach (var skill in SkillDictionary)
+        foreach (var skill in AllDictionaryEntries())
         {
-            if (lower.Contains(skill, StringComparison.Ordinal))
+            if (OccursAsTerm(lower, skill))
                 found[skill] = 1000 + CountOccurrences(lower, skill);
         }
 
@@ -94,7 +136,9 @@ public static partial class Keywords
         var missing = new List<string>();
         foreach (var keyword in wanted)
         {
-            if (have.Contains(keyword) || resumeLower.Contains(keyword, StringComparison.Ordinal))
+            // A dictionary term is matched on its own boundaries; a raw token is matched as a
+            // substring, which is enough because it came out of the same tokenizer.
+            if (have.Contains(keyword) || OccursAsTerm(resumeLower, keyword))
                 matched.Add(keyword);
             else
                 missing.Add(keyword);
@@ -120,6 +164,31 @@ public static partial class Keywords
         var hits = postingKeywords.Count(k => resumeLower.Contains(k, StringComparison.Ordinal));
         return (int)Math.Round(hits * 100.0 / postingKeywords.Count);
     }
+
+    /// <summary>
+    /// Does <paramref name="term"/> appear as a term rather than as a fragment of a longer word?
+    ///
+    /// Plain substring matching made "ui" match "build" and "quality", and "qa" match "quality",
+    /// so a two-letter skill was always reported as present. Terms that begin or end with a
+    /// non-word character (".net", "c#", "ci/cd") are exempt on that edge, because there is no
+    /// word boundary to find there.
+    /// </summary>
+    private static bool OccursAsTerm(string haystack, string term)
+    {
+        if (term.Length == 0) return false;
+        var index = 0;
+        while ((index = haystack.IndexOf(term, index, StringComparison.Ordinal)) >= 0)
+        {
+            var beforeOk = index == 0 || !char.IsLetterOrDigit(term[0]) || !IsWordChar(haystack[index - 1]);
+            var after = index + term.Length;
+            var afterOk = after >= haystack.Length || !char.IsLetterOrDigit(term[^1]) || !IsWordChar(haystack[after]);
+            if (beforeOk && afterOk) return true;
+            index += term.Length;
+        }
+        return false;
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c);
 
     private static int CountOccurrences(string haystack, string needle)
     {

@@ -110,18 +110,48 @@ This is the most important invariant in the codebase, enforced in four places:
    information, the run stops and returns the pending items instead of writing a resume.
 
 The deterministic paths (`Cleaner`, `AtsScorer`) only ever transform existing text: they normalise
-whitespace, strip icons, uppercase detected headings. They cannot add a fact because they never
-generate prose.
+   whitespace, strip icons, uppercase detected headings. They cannot add a fact because they never
+   generate prose.
+
+### The same rule, in the services added later
+
+Fabrication prevention is not one guard, it is a shape that each new feature has to keep:
+
+| Service | Rule | Why it exists |
+|---|---|---|
+| `RewriteGate` / `RewriteLedger` | A model rewrite is re-scored against the deterministic baseline and discarded if it does not improve; every decision is recorded | Otherwise "the model rewrote my resume" is unfalsifiable |
+| `FactSupportService` | A claim with no verified fact behind it is queued for approval, never kept | The resume is the thing you get asked to defend |
+| `GapRampService` | A suggestion with no `buildsOnFactId` naming a verified fact is dropped | "What should I learn" is the easiest prompt to answer with fiction |
+| `JobQualityService` | A flag that is judgement about someone else's posting must carry a verbatim quote, or it is discarded | A caveat with no quote is a guess about another company's hiring policy |
+| `SkillDictionaryService` | The proposer writes only to `pending_facts`; only approval touches the scoring dictionary | A scoring list is not the tool's to decide |
+
+Every one of these has a test that asserts the *discard* path, not just the accept path. The accept
+path is the easy half; the rule only means something if the other half is enforced.
+
+**Where this deliberately does not apply: web search.** `WebSearchService` is the one place allowed to
+emit numbers, dates and outside proper nouns, because it is quoting the web rather than describing
+the user. Routing it through `Validate` would discard essentially every real result. So search output
+is handled by a different rule: it is **quoted with its source URLs and structurally cannot write to
+the profile** — `WebSearchService` holds no reference to `ProfileService` and no path to a fact write.
+Two tests assert that absence rather than trusting the comment.
 
 ## Source fetching
 
-`SourceHttp` owns robots.txt evaluation (longest-match semantics, per-`User-Agent` groups),
-per-host rate limiting, a SQLite response cache with TTL, and one shared `HttpClient`.
+`SourceHttp` owns robots.txt evaluation, per-host rate limiting, a SQLite response cache with TTL, and
+one shared `HttpClient`. Evaluation is a pure function, `SourceHttp.Evaluate`, so the precedence rules
+are testable offline: `Allow` and `Disallow` are matched as prefix patterns with `*` wildcards and a
+trailing `$` anchor, and **the longest match across both lists wins, with `Allow` winning ties**. An
+earlier version let any single matching `Allow` unlock the whole host, so `Allow: /public` next to
+`Disallow: /public/secret` wrongly marked the secret path fetchable.
 `SourceParser` normalises four source types into one `RawJob` shape, with a lenient XML fallback for
 feeds that are not well-formed — which is most of them. `SourceDetector` probes a pasted URL and
 classifies it. `Dedupe` collapses the same posting across boards.
 
 `link` sources are never fetched. That is enforced in `JobSearchService`, not only in the UI.
+
+Seeded URLs rot, so `SeedLivenessTests` resolves every seeded host under
+`RESUCLEAN_LIVE_SOURCE_CHECK=1`. It is DNS-level only and never requests a page, which is what makes
+it safe to run against hosts whose `robots.txt` forbids crawling.
 
 ## Frontend
 
@@ -142,9 +172,16 @@ no external fonts or CDNs.
 
 | Layer | What it covers | Why it exists |
 |---|---|---|
-| `tests/ResuClean.Tests` (165) | Cleaner, ATS weighting, no-fabrication guard, profile pending/dedupe, router fallback with mock providers, source parsing from fixtures, dedupe, `.eml`/`.zip`, key encryption | The invariants above are worth pinning |
+| `tests/ResuClean.Tests` (309) | Cleaner, ATS weighting, no-fabrication guard, profile pending/dedupe, router fallback with mock providers, source parsing from fixtures, dedupe, `.eml`/`.zip`, key encryption, requirement classification, posting quality, gap ramps, interview grounding, the rewrite gate and ledger, tracker transfer | The invariants above are worth pinning |
 | `web/src/tests` (11) | Router, link interception, error envelope, op polling | Cheap confidence in the client contract |
-| `scripts/smoke-api.mjs` (40) | Live HTTP against a throwaway database, asserting payloads are our JSON shapes | Caught the serialised-`Task` bug that 13 endpoints shipped with |
+| `scripts/smoke-api.mjs` (62) | Live HTTP against a throwaway database, asserting payloads are our JSON shapes | Caught the serialised-`Task` bug that 13 endpoints shipped with |
 
 Source tests use **saved fixtures only** — no test touches the network. `TestHost` creates a real
 SQLite database in a temp directory so services run exactly as they do in production.
+
+The suite runs **serially** (`AssemblyInfo.cs` sets `DisableTestParallelization`). `Paths.DataDir` and
+the approved skill dictionary are process-level state by design — one data folder for the whole app,
+and a scoring list every scorer reads without a list threaded through it — and xUnit's default
+parallelism had two `TestHost`s in flight at once pointing at different temp databases. It produced a
+test that passed in isolation and failed in a full run, which is worse than a slow suite: it teaches
+people to retry.

@@ -109,6 +109,110 @@ public class AtsScorerTests
     }
 }
 
+/// <summary>
+/// The quantified check carries the single largest weight in the scorer, so what it counts and
+/// what it refuses to count is pinned here. An earlier version matched any bare 4-digit number,
+/// so employment dates alone satisfied it and every score was inflated by up to 18 points.
+/// </summary>
+public class QuantifiedCheckTests
+{
+    private static ResuClean.Models.AtsCheck Check(string text) =>
+        AtsScorer.Score("ver_test", text).Checks.Single(c => c.Id == "quantified");
+
+    private const string DatedButUnquantified = """
+        JANE DOE
+        jane.doe@example.com | +254700000000 | Nairobi, Kenya
+
+        SUMMARY
+        Data analyst with 6 years of experience in financial reporting.
+
+        EXPERIENCE
+        Senior Data Analyst | Kenya Commercial Bank | Mar 2021 - Present
+        - Led the migration of the monthly reporting pack to Power BI.
+        - Reduced reconciliation errors by introducing automated validation.
+        - Managed the reporting calendar across the business units.
+
+        Data Analyst | Finlay Analytics | Jun 2018 - Feb 2021
+        - Built SQL ETL pipelines over the transaction data.
+        - Automated the regulatory reporting pack.
+        - Partnered with finance on variance analysis.
+
+        EDUCATION
+        BSc Statistics, University of Nairobi, 2014 - 2018
+        """;
+
+    [Fact]
+    public void Employment_dates_alone_do_not_pass_the_check()
+    {
+        var check = Check(DatedButUnquantified);
+        Assert.False(check.Passed);
+        Assert.Contains("No measurable results", check.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_phone_number_is_not_a_quantified_result()
+    {
+        // Six separate employment/education ranges plus a 10-digit phone number.
+        var check = Check("+254700000000\nMar 2021 - Present\nJun 2018 - Feb 2021\n2014 - 2018\n2019 - 2020");
+        Assert.False(check.Passed);
+    }
+
+    [Fact]
+    public void A_percentage_beside_one_large_number_counts_as_two()
+    {
+        // The old scorer counted the percentage and the number, then subtracted the percentage
+        // back off again and failed a genuinely quantified line.
+        var check = Check("- Reduced reconciliation errors by 38% across 1,200 transactions.");
+        Assert.Equal(2, QuantifiedCount(check));
+    }
+
+    [Fact]
+    public void Three_real_metrics_pass()
+    {
+        var check = Check("- Cut errors by 38%.\n- Processed 1,200 transactions.\n- Saved 30 hours per month.");
+        Assert.True(check.Passed);
+        Assert.Contains("3 quantified results", check.Detail);
+    }
+
+    [Fact]
+    public void One_figure_is_never_counted_twice()
+    {
+        // "5 million rows" is a currency-style magnitude, and must not also count as a bare count.
+        Assert.Equal(1, QuantifiedCount(Check("- Queried 5 million rows.")));
+        Assert.Equal(1, QuantifiedCount(Check("- Reduced spend by 20%.")));
+        Assert.Equal(1, QuantifiedCount(Check("- Managed KES 400M of spend.")));
+    }
+
+    [Fact]
+    public void Tenure_is_not_an_achievement()
+    {
+        // "6 years of experience" is a duration statement, not a measurable result.
+        Assert.Equal(0, QuantifiedCount(Check("Data analyst with 6 years of experience.")));
+    }
+
+    [Fact]
+    public void Currency_and_volume_both_count()
+    {
+        Assert.Equal(1, QuantifiedCount(Check("- Delivered KES 400M of spend.")));
+        Assert.Equal(1, QuantifiedCount(Check("- Managed a team of 4 analysts.")));
+    }
+
+    [Fact]
+    public void The_sample_resume_still_passes_and_still_scores_well()
+    {
+        var report = AtsScorer.Score("ver_test", TestHost.SampleResume);
+        Assert.True(report.Checks.Single(c => c.Id == "quantified").Passed);
+        Assert.True(report.Score >= 70, $"expected a good score, got {report.Score}");
+    }
+
+    /// <summary>Reads the total back out of the detail string, so the count itself is asserted, not just pass/fail.</summary>
+    private static int QuantifiedCount(ResuClean.Models.AtsCheck check)
+    {
+        var digits = new string(check.Detail.TakeWhile(c => char.IsDigit(c)).ToArray());
+        return int.TryParse(digits, out var n) ? n : 0;
+    }
+}
+
 public class ResumeWorkflowValidationTests
 {
     /// <summary>
@@ -120,7 +224,7 @@ public class ResumeWorkflowValidationTests
     {
         using var host = new TestHost();
         var (_, versionId) = host.Store.Create("Test", "Reduced errors by 38%.", "paste");
-        var workflows = new ResumeWorkflows(host.Db, host.Profile, host.Router);
+        var workflows = host.Workflows();
 
         var validated = workflows.Validate("Reduced errors by 92% and saved 500,000 KES.", "Reduced errors by 38%.");
         Assert.Equal(string.Empty, validated.Text);
@@ -133,7 +237,7 @@ public class ResumeWorkflowValidationTests
     {
         using var host = new TestHost();
         host.Store.Create("Test", "Worked at Acme from 2018 to 2021.", "paste");
-        var workflows = new ResumeWorkflows(host.Db, host.Profile, host.Router);
+        var workflows = host.Workflows();
 
         var validated = workflows.Validate("Worked at Acme from 2012 to 2025.", "Worked at Acme from 2018 to 2021.");
         Assert.Equal(string.Empty, validated.Text);
@@ -144,7 +248,7 @@ public class ResumeWorkflowValidationTests
     public void Validation_accepts_pure_rephrasing()
     {
         using var host = new TestHost();
-        var workflows = new ResumeWorkflows(host.Db, host.Profile, host.Router);
+        var workflows = host.Workflows();
 
         var original = "Reduced reconciliation errors by 38% across 1,200 transactions.";
         var reworded = "Cut reconciliation errors by 38% across 1,200 transactions.";
@@ -158,7 +262,7 @@ public class ResumeWorkflowValidationTests
     public void Validation_flags_unknown_names_without_discarding_the_output()
     {
         using var host = new TestHost();
-        var workflows = new ResumeWorkflows(host.Db, host.Profile, host.Router);
+        var workflows = host.Workflows();
 
         var validated = workflows.Validate("Worked at Globex on the reporting stack.", "Worked at Initech on the reporting stack.");
         Assert.NotEqual(string.Empty, validated.Text);

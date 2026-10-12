@@ -26,10 +26,11 @@
   let online = true;
   let edition = '';
 
-  const navIcons: Record<string, 'doc' | 'book' | 'search' | 'mail' | 'list' | 'gear'> = {
+  const navIcons: Record<string, 'doc' | 'book' | 'search' | 'compass' | 'mail' | 'list' | 'gear'> = {
     '/': 'doc',
     '/profile': 'book',
     '/jobs': 'search',
+    '/search': 'compass',
     '/kits': 'mail',
     '/tracker': 'list',
     '/models': 'gear'

@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, upload, waitForOp, ApiError, type Paged, type ResumeDetail, type ResumeSummary, type ResumeVersion, type AtsReport, type CleanResult, type UpdateResult } from '../lib/api';
+  import { api, upload, waitForOp, ApiError, type Paged, type ResumeDetail, type ResumeSummary, type ResumeVersion, type AtsReport, type CleanResult, type UpdateResult, type FactCheckReport } from '../lib/api';
   import { flash, pendingCount, capabilities } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import Notice from '../lib/ui/Notice.svelte';
   import Icon from '../lib/ui/Icon.svelte';
   import AtsReportView from '../lib/ui/AtsReport.svelte';
+  import RewriteVerdict from '../lib/ui/RewriteVerdict.svelte';
   import CopyButton from '../lib/ui/CopyButton.svelte';
 
   let resumes: ResumeSummary[] = [];
@@ -23,13 +24,14 @@
   let clean: CleanResult | null = null;
   let ats: AtsReport | null = null;
   let update: UpdateResult | null = null;
+  let facts: FactCheckReport | null = null;
   let jobDescription = '';
   let instruction = '';
   let versionText = '';
 
   let loadError: string | null = null;
 
-  const tabs = ['Resume', 'Versions', 'Clean', 'ATS scan', 'Tailor'] as const;
+  const tabs = ['Resume', 'Versions', 'Clean', 'ATS scan', 'Grounding', 'Tailor'] as const;
   let tab: (typeof tabs)[number] = 'Resume';
 
   onMount(async () => {
@@ -54,6 +56,7 @@
       clean = null;
       ats = null;
       update = null;
+      facts = null;
     } catch (err) {
       flash(err instanceof Error ? err.message : String(err), 'error');
     }
@@ -176,6 +179,48 @@
       flash(err instanceof Error ? err.message : String(err), 'error');
     } finally {
       busy = null;
+    }
+  }
+
+  async function runFactCheck() {
+    if (!selectedVersionId) return;
+    busy = 'facts';
+    progress = 'Checking every claim against your verified profile…';
+    try {
+      const accepted = await api.post<{ opId: string }>(`/resumes/versions/${selectedVersionId}/fact-check`, {});
+      facts = await waitForOp<FactCheckReport>(accepted.opId, (s) => (progress = s.state === 'running' ? 'Checking…' : 'Queued…'));
+      progress = '';
+      if (facts.queued.length > 0) {
+        $pendingCount = facts.queued.length;
+        flash(`${facts.ungrounded} claim${facts.ungrounded === 1 ? '' : 's'} queued for your approval.`);
+      } else {
+        flash(`Checked ${facts.checked} claims. Nothing needed approval.`);
+      }
+    } catch (err) {
+      progress = '';
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      busy = null;
+    }
+  }
+
+  /**
+   * Saves a rewrite the gate refused. The measurement was a recommendation, not a veto: the text
+   * has already been through the fabrication guard, so the only thing standing between it and the
+   * user is their own judgement.
+   */
+  async function keepRejected(event: CustomEvent<string>) {
+    if (!selectedVersionId || !event.detail) return;
+    try {
+      await api.post(`/resumes/versions/${selectedVersionId}/accept-text`, {
+        text: event.detail,
+        label: 'Refused rewrite, kept by hand'
+      });
+      // Reopening lands on the newest version, which is the one just saved.
+      if (detail) await openResume(detail.summary.id);
+      flash('Saved as a new version. The refused rewrite is now your current text.');
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
     }
   }
 
@@ -436,6 +481,10 @@
                 </tbody>
               </table>
 
+              {#if clean.rewrite}
+                <RewriteVerdict outcome={clean.rewrite} on:keep={keepRejected} />
+              {/if}
+
               {#if clean.warnings.length > 0}
                 <div class="warnings">
                   <span class="label label-ink">Notes and warnings</span>
@@ -481,6 +530,64 @@
             />
           {/if}
         </div>
+      {:else if tab === 'Grounding'}
+        <div class="pane">
+          <p>
+            Checks every claim this resume makes against your verified profile. Anything with no
+            supporting fact is queued for your approval rather than deleted — your resume is never
+            changed by this.
+          </p>
+
+          <button type="button" class="btn btn-primary" on:click={runFactCheck} disabled={busy !== null}>
+            {busy === 'facts' ? 'Checking…' : 'Check this version'}
+          </button>
+          {#if busy}<p class="meta" role="status">{progress}</p>{/if}
+
+          {#if facts}
+            <div class="result">
+              <Rule
+                text="Grounding"
+                note="{facts.grounded} of {facts.checked} claims backed by a verified fact"
+              />
+
+              <p class="meta">
+                Checked by the {facts.method === 'model'
+                  ? `model${facts.model ? ` (${facts.model})` : ''}`
+                  : 'deterministic pass'}.
+                {#if facts.method !== 'model'}
+                  No model was routed, so only unverified figures are checked. Routing
+                  <span class="mono">fact_check</span> in Models adds claim-by-claim citation.
+                {/if}
+              </p>
+
+              {#if facts.ungrounded === 0}
+                <Notice
+                  tone="info"
+                  title="Every claim checked has something behind it"
+                  message="{facts.checked} claims were looked at and none was left unsupported."
+                />
+              {:else}
+                <Notice
+                  title="{facts.ungrounded} claim{facts.ungrounded === 1 ? '' : 's'} with nothing behind {facts.ungrounded === 1 ? 'it' : 'them'}"
+                  message="These went to your approval queue. Approve the ones that are true and reject the rest — approving adds them to your verified profile."
+                  hint="Review them in Profile."
+                >
+                  <ul class="pending-preview">
+                    {#each facts.claims.filter((c) => !c.grounded) as claim (claim.text)}
+                      <li><span class="badge">{claim.category}</span> {claim.text}</li>
+                    {/each}
+                  </ul>
+                  <a class="btn btn-sm" href="/profile">Open Profile</a>
+                </Notice>
+              {/if}
+            </div>
+          {:else}
+            <Empty
+              title="Not checked yet"
+              message="Run the check to find claims your verified profile does not support. It needs no model."
+            />
+          {/if}
+        </div>
       {:else if tab === 'Tailor'}
         <div class="pane">
           <p>
@@ -518,6 +625,9 @@
                 </Notice>
               {:else}
                 <Rule text="Tailored version" note={update.usedModel ? `written by ${update.model}` : 'no model was routed'} />
+                {#if update.rewrite}
+                  <RewriteVerdict outcome={update.rewrite} on:keep={keepRejected} />
+                {/if}
                 <ul class="notes">
                   {#each update.notes as note, i (i)}
                     <li>{note}</li>
