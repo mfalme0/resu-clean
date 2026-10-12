@@ -612,12 +612,14 @@ npm run smoke         # live API smoke test against a throwaway database
 npm run mem:measure   # regenerate the memory table above
 ```
 
-- **312 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
+- **315 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
   profile pending/dedupe/approval, router fallback with mock models, source parsing and field
   mapping from saved fixtures (no network), cross-source dedupe, `.eml`/`.zip` generation, key
   encryption at rest, robots.txt longest-match precedence, the seed pack invariants, requirement
   classification, posting quality, gap ramps, interview grounding, tracker export/import, the
-  skill dictionary, and the rewrite gate and ledger.
+  skill dictionary, and the rewrite gate and ledger. Includes a migration test that boots the real
+  services against a database shaped like an older release, which is the upgrade path no other test
+  covers.
 - **11 frontend tests** — router, link interception, error envelope, op polling.
 - **62 API smoke checks** — real HTTP against a running backend, asserting payloads are actually our
   JSON shapes. This exists because it caught a bug where 13 endpoints returned HTTP 200 with a

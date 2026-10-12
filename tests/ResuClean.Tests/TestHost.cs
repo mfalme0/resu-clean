@@ -11,10 +11,18 @@ namespace ResuClean.Tests;
 /// </summary>
 public sealed class TestHost : IDisposable
 {
-    public TestHost(int cacheTtlSeconds = 0)
+    private readonly bool _ownsDataDir;
+    /// <param name="cacheTtlSeconds">Cache TTL for the HTTP cache.</param>
+    /// <param name="dataDir">
+    /// An existing directory to use instead of a fresh temp one. Used by the migration tests, which
+    /// seed a database shaped like an older release and then boot the real services against it.
+    /// </param>
+    /// <param name="ownsDataDir">When false the directory is left in place on dispose.</param>
+    public TestHost(int cacheTtlSeconds = 0, string? dataDir = null, bool ownsDataDir = true)
     {
-        DataDir = Path.Combine(Path.GetTempPath(), "resu-clean-tests", Guid.NewGuid().ToString("N")[..10]);
+        DataDir = dataDir ?? Path.Combine(Path.GetTempPath(), "resu-clean-tests", Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(DataDir);
+        _ownsDataDir = ownsDataDir;
         Paths.DataDir = DataDir;
 
         AppConfig = new Configuration.AppConfig
@@ -99,7 +107,7 @@ public sealed class TestHost : IDisposable
         try
         {
             Db.Dispose();
-            if (Directory.Exists(DataDir)) Directory.Delete(DataDir, recursive: true);
+            if (_ownsDataDir && Directory.Exists(DataDir)) Directory.Delete(DataDir, recursive: true);
         }
         catch
         {
