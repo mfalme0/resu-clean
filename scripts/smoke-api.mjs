@@ -312,6 +312,33 @@ try {
         }
       }
 
+      // ---- verification ----
+      // The timestamp and the status are separate facts, and only one of them may move on a check
+      // that could not confirm anything. A posting that reads as "open" because nobody re-checked it
+      // is the failure this endpoint exists to prevent.
+      const verified = await call('POST /jobs/{id}/verification', 'POST', `/jobs/${ats.id}/verification`,
+        { status: 'open' },
+        { check: has(['jobId', 'status', 'effectiveStatus']) });
+      if (verified && verified.effectiveStatus !== 'open') {
+        console.error(`  FAIL verification: a confirmed-open posting reads as "${verified.effectiveStatus}"`);
+        failures++;
+      }
+      if (verified && !verified.lastVerifiedAt) {
+        console.error('  FAIL verification: an open posting carries no lastVerifiedAt');
+        failures++;
+      }
+
+      const unverifiable = await call('POST /jobs/{id}/verification (unverifiable)', 'POST',
+        `/jobs/${ats.id}/verification`, { status: 'unverifiable' },
+        { check: has(['jobId', 'status', 'effectiveStatus']) });
+      if (unverifiable && unverifiable.effectiveStatus === 'open') {
+        console.error('  FAIL verification: an unverifiable posting was reported as open');
+        failures++;
+      }
+
+      await call('POST /jobs/{id}/verification (bad status) -> 400', 'POST', `/jobs/${ats.id}/verification`,
+        { status: 'probably-fine' }, { expectStatus: 400 });
+
       // ---- interview prep ----
       // The claims nothing backs are reported even though no model is configured: those are the
       // landmines, and finding them does not need a model.

@@ -69,8 +69,58 @@ public sealed partial class JobQualityService
         flags.AddRange(Staleness(job));
         flags.AddRange(TitleMismatch(job));
         flags.AddRange(Eligibility(job));
+        flags.AddRange(Closure(job));
 
         return new Report(jobId, flags, false, "deterministic");
+    }
+
+    /// <summary>
+    /// Has this posting actually closed? Three ways to tell, in the order they can be trusted.
+    ///
+    /// A board saying "no longer accepting applications" is stating a fact about its own listing and
+    /// outranks everything else. A stated closing date that has passed is arithmetic. And a deadline
+    /// that has not passed says nothing at all — it is not evidence the role is open, it is only
+    /// evidence that it has not been given up, which is why it is reported as information.
+    ///
+    /// The case this exists for: a posting two days old whose deadline was yesterday. Staleness looks
+    /// at the posted date and sees nothing, so without this the tracker carried a deadline for several
+    /// rounds of planning while the page had been saying "expired" the whole time.
+    /// </summary>
+    private static IEnumerable<Flag> Closure(JobDto job)
+    {
+        if (DeadlineReader.StatesClosed(job.Description))
+        {
+            yield return new Flag("closed", "warn",
+                "The posting itself says this role is closed. Do not spend an evening on it.",
+                null);
+            yield break;
+        }
+
+        if (job.DeadlineAt is not { Length: > 0 } stated) yield break;
+        if (!DateTime.TryParse(stated, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var when))
+            yield break;
+
+        var days = (when - DateTime.UtcNow).TotalDays;
+        if (days < 0)
+        {
+            // The plural is a local because a ternary cannot sit inside an interpolation directly:
+            // the compiler reads the colon as the start of a format specifier.
+            var ago = (int)-days;
+            var plural = ago == 1 ? "" : "s";
+            yield return new Flag("closed", "warn",
+                $"The posting's own closing date passed {ago} day{plural} ago. It states it closed on {when:yyyy-MM-dd}.",
+                null);
+        }
+        else if (days <= 7)
+        {
+            var left = (int)Math.Ceiling(days);
+            var plural = left == 1 ? "" : "s";
+            yield return new Flag("deadline", "info",
+                $"This posting states it closes on {when:yyyy-MM-dd}, in {left} day{plural}. "
+                + "That is not evidence it is still easy to get.",
+                null);
+        }
     }
 
     /// <summary>The one part that is pure arithmetic, and therefore never wrong.</summary>

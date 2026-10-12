@@ -106,6 +106,18 @@ CREATE TABLE IF NOT EXISTS jobs (
   is_manual     INTEGER NOT NULL DEFAULT 0,
   best_version_id TEXT,
   raw           TEXT NOT NULL DEFAULT '{}',
+  -- When this posting was last confirmed to still exist, as opposed to when we first saved it.
+  -- A posting carried as live for three sessions is the failure this exists to prevent: nothing
+  -- ever asked the employer's system again, so "we applied to this" quietly became "this is open".
+  -- NULL means never verified, which is not the same as verified and never was.
+  last_verified_at TEXT,
+  -- The closing date the posting states, where one can be read out of the text. NULL means no
+  -- deadline was stated, which is information rather than an absence.
+  deadline_at   TEXT,
+  -- open | closed | unverifiable, from a check against the employer's own system. "unverifiable"
+  -- is stored rather than rounded up to open: a 403 or a wrong-company redirect confirmed nothing,
+  -- and a tracker that calls those live is the false confidence this whole column set removes.
+  status        TEXT NOT NULL DEFAULT '',
   created_at    TEXT NOT NULL,
   UNIQUE(url, title, company)
 );

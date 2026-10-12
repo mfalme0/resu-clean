@@ -485,6 +485,28 @@
                 {#if job.company}<span class="meta company">{job.company}</span>{/if}
                 {#if job.remote}<span class="badge badge-pass">remote</span>{/if}
                 {#if job.isManual}<span class="badge">manual</span>{/if}
+                <!--
+                  The verification badge is the point of recording when a posting was last confirmed
+                  open rather than when we first saved it. "Not verified" is shown deliberately: a
+                  posting nobody has checked should not look like one somebody confirmed this morning.
+                -->
+                {#if job.effectiveStatus === 'open'}
+                  <span
+                    class="badge badge-pass"
+                    title={job.lastVerifiedAt ? `Confirmed open ${job.lastVerifiedAt.slice(0, 10)}` : 'Confirmed open'}
+                  >open &middot; checked {job.lastVerifiedAt ? job.lastVerifiedAt.slice(0, 10) : 'recently'}</span>
+                {:else if job.effectiveStatus === 'expired'}
+                  <span
+                    class="badge badge-accent"
+                    title={job.deadlineAt ? `Passed the closing date it states: ${job.deadlineAt.slice(0, 10)}` : 'Deadline passed'}
+                  >deadline passed</span>
+                {:else if job.effectiveStatus === 'closed'}
+                  <span class="badge badge-accent" title="The posting itself says this role is closed">closed</span>
+                {:else if job.effectiveStatus === 'unverifiable'}
+                  <span class="badge" title="A check could not confirm this. That is not the same as open.">unverified</span>
+                {:else}
+                  <span class="badge" title="Never checked against the employer's own system">not verified</span>
+                {/if}
               </td>
               <td class="mono">{job.location || '—'}</td>
               <td class="mono">{job.sourceName}</td>

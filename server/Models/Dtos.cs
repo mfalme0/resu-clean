@@ -345,7 +345,15 @@ public sealed record JobDto(
     int UnmetBlockers = 0,
     int UnmetRequired = 0,
     /// <summary>False until the posting has been classified. Unchecked is not the same as clear.</summary>
-    bool RequirementsChecked = false);
+    bool RequirementsChecked = false,
+    /// <summary>When this posting was last confirmed open. Null means never confirmed.</summary>
+    string? LastVerifiedAt = null,
+    /// <summary>A closing date read out of the posting. Null means the posting states none.</summary>
+    string? DeadlineAt = null,
+    /// <summary>open | closed | unverifiable, from a check against the employer's own system.</summary>
+    string Status = "",
+    /// <summary>What a user can act on today: open, closed, expired or unknown.</summary>
+    string EffectiveStatus = "unknown");
 
 public sealed record JobRequirementDto(
     string Text,

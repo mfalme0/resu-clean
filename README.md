@@ -36,6 +36,7 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Adding a source](#adding-a-source)
 - [Adding a model](#adding-a-model)
 - [Search](#search)
+- [Is this posting still real?](#is-this-posting-still-real)
 - [Reading a posting](#reading-a-posting)
 - [Closing a gap](#closing-a-gap)
 - [The scoring dictionary](#the-scoring-dictionary)
@@ -399,6 +400,40 @@ that happens the UI says so rather than implying the answer came off the web.
   date absent from your input — which is exactly what a search result is made of. Routing search
   through it would reject every real answer.
 
+## Is this posting still real?
+
+Checked across 27 tracked positions on 12 Oct 2026, more than half were not what they appeared to
+be: four Jumia roles 404ing, a Google posting whose page had been reading "expired" since 2023, and
+twelve that could not be verified at all. The four Jumia roles were carried as live across three
+sessions purely because **nothing ever asked the employer's system again.**
+
+So every posting carries two facts that were previously conflated into one:
+
+| | |
+|---|---|
+| **Saved** | when you first captured it. A record of your own action, and nothing more |
+| **Verified** | when it was last *confirmed open*. A record about the employer's system |
+
+Three outcomes, and the third is the one that matters:
+
+- `open` — the employer's own system answered, and the timestamp moves forward
+- `closed` — it answered and said no
+- `unverifiable` — a 403, a posting with no URL, or an aggregator page that resolved to the wrong
+  company. **Nobody confirmed anything**, and it is stored as its own status rather than rounded up
+  to open
+
+A check that fails does **not** advance the verified timestamp. "We checked and could not tell" is
+not "we checked and it was there" — and blanking the last good answer is exactly backwards, since a
+failed check is the moment you most want to see when you last had one.
+
+`DeadlineReader` reads a closing date out of the posting's own words, and `closed` out of a page that
+says so. A deadline still in the future is reported as information, never as evidence the role is
+winnable. Where no deadline is stated, that is reported too: an absent deadline is information.
+
+**An aggregator is a convenience, not evidence.** Only the employer's own system can return a 404,
+so a posting sourced from a board API carries a different failure mode from one on a company ATS, and
+the badge says which you have.
+
 ## Reading a posting
 
 A job list ordered by keyword overlap will happily put a seventeen-month-old listing at the top, a
@@ -409,7 +444,7 @@ puts them on the screen:
 | What you see | How it is decided |
 |---|---|
 | `blocker` / `required` / `preferred` / `implicit` | Split from the posting text, then checked against your verified profile. A blocker cannot be closed by studying |
-| **Worth knowing first** | Stale (older than 45 days, arithmetic), title-vs-description mismatch, eligibility caveats |
+| **Worth knowing first** | Stale (older than 45 days, arithmetic), title-vs-description mismatch, eligibility caveats, and **closed** — either a stated closing date that has passed or a page saying it is shut |
 | **How do I close this?** | One button per unmet requirement |
 
 **Every judgement flag carries a quote.** The posting says "Candidates must be authorised to work in
@@ -619,9 +654,11 @@ npm run mem:measure   # regenerate the memory table above
   classification, posting quality, gap ramps, interview grounding, tracker export/import, the
   skill dictionary, and the rewrite gate and ledger. Includes a migration test that boots the real
   services against a database shaped like an older release, which is the upgrade path no other test
-  covers.
-- **11 frontend tests** — router, link interception, error envelope, op polling.
-- **62 API smoke checks** — real HTTP against a running backend, asserting payloads are actually our
+  covers. Plus scorer invariants held across generated input, and deadline reading that is mostly
+  tested for what it must *not* read.
+- **21 frontend tests** — router, link interception, error envelope, op polling, and the null-omission
+  contract every renderer depends on.
+- **65 API smoke checks** — real HTTP against a running backend, asserting payloads are actually our
   JSON shapes. This exists because it caught a bug where 13 endpoints returned HTTP 200 with a
   serialised `Task` instead of their data.
 

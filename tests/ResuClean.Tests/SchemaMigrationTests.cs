@@ -130,6 +130,45 @@ public class SchemaMigrationTests : IDisposable
     /// <summary>Boots the real services against the seeded directory, exactly as the app would.</summary>
     private TestHost Boot() => new(dataDir: _dir, ownsDataDir: false);
 
+    /// <summary>
+    /// The failure CREATE TABLE IF NOT EXISTS cannot catch, and the reason this class exists.
+    ///
+    /// A new column in Schema.sql is applied only to a database that does not yet have the table.
+    /// Every other test in the suite starts from nothing, so they all pass while an existing user's
+    /// database is silently missing the column — and nothing fails until the query that reads it
+    /// runs, on their machine, with their data in it. There is no startup error to notice.
+    ///
+    /// So: seed the old shape, boot, and ask for the column as a user would.
+    /// </summary>
+    [Fact]
+    public void A_column_added_since_the_last_release_reaches_an_existing_database()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        // Written against the current schema on purpose. If a future release adds a column and
+        // forgets the migration, this is the assertion that fails.
+        var deadline = host.Jobs.UpdateVerification("job_1", lastVerifiedAt: "2026-10-12T09:00:00Z",
+            deadlineAt: "2026-10-30T23:59:59Z", status: "open");
+
+        Assert.Equal("2026-10-12T09:00:00Z", deadline.LastVerifiedAt);
+        Assert.Equal("2026-10-30T23:59:59Z", deadline.DeadlineAt);
+
+        // And it must survive a read, not just a write.
+        Assert.Equal("2026-10-12T09:00:00Z", host.Jobs.GetJob("job_1")?.LastVerifiedAt);
+    }
+
+    [Fact]
+    public void A_posting_saved_before_this_release_reads_as_never_verified()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        // NULL is the honest value and must not be papered over with a creation date. "We applied
+        // to this" and "this was open when we checked" are different facts.
+        Assert.Null(host.Jobs.GetJob("job_1")?.LastVerifiedAt);
+    }
+
     [Fact]
     public void An_existing_database_is_upgraded_rather_than_recreated()
     {

@@ -203,6 +203,10 @@ public static partial class AtsScorer
         var found = new List<string>();
         var missing = new List<string>();
 
+        // A heading counts when the word is there. Whether it has content underneath is a separate
+        // question, and folding it in here would change what this check means: the existing
+        // QuantifiedCheckTests fixture already relies on a bare heading not being treated as an
+        // achievement, which is a different rule enforced elsewhere.
         foreach (var (label, matchers) in HeadingMatchers)
         {
             var hit = lowered.Any(s => matchers.Any(m =>

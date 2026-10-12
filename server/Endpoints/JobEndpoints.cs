@@ -167,7 +167,47 @@ public static class JobEndpoints
                     report.Suggestions.Select(s => new GapSuggestionDto(s.Text, s.BuildsOnFactId, s.BuildsOnFactText, s.Why)).ToList(),
                     report.NearestFact, gaps.IsClosable(cls, missing), report.UsedModel, report.Method));
             }));
+
+        // ---- Verification -----------------------------------------------------
+
+        /// <summary>
+        /// Records what a check against the employer's own system actually found.
+        ///
+        /// This is the difference between "we applied to this" and "we applied to this, and it was
+        /// open when we checked on the 12th". Four positions carried as live across three sessions
+        /// because nothing ever asked again, which is the failure this endpoint exists to stop.
+        ///
+        /// "unverifiable" is a real answer and is stored as one. A Cloudflare 403, a posting with no
+        /// URL, or an aggregator search page that resolved to the wrong company all mean nobody
+        /// confirmed anything, and rounding those up to "open" is how a tracker manufactures
+        /// confidence it has not earned.
+        /// </summary>
+        group.MapPost("/{id}/verification", (string id, VerifyJobRequest body, JobSearchService jobs) =>
+            Api.Guard(() =>
+            {
+                var status = body.Status?.Trim().ToLowerInvariant() ?? "";
+                if (status is not ("open" or "closed" or "unverifiable"))
+                    throw new ArgumentException("Status must be open, closed or unverifiable.");
+
+                var job = jobs.GetJob(id) ?? throw new KeyNotFoundException($"No job called '{id}'.");
+
+                // The deadline comes from the posting's own text and is only stored when one is
+                // stated. Absent is information, so it is never overwritten with a guess.
+                var deadline = body.DeadlineAt ?? DeadlineReader.Read(job.Description);
+                var verified = jobs.UpdateVerification(id, status == "open" ? JobSearchService.Now() : null, deadline, status);
+                return Task.FromResult(Api.Ok(new JobVerificationDto(
+                    verified.Id, verified.Status, verified.LastVerifiedAt, verified.DeadlineAt, verified.EffectiveStatus)));
+            }));
     }
+
+    public sealed record VerifyJobRequest(string? Status, string? DeadlineAt);
+
+    public sealed record JobVerificationDto(
+        string JobId,
+        string Status,
+        string? LastVerifiedAt,
+        string? DeadlineAt,
+        string EffectiveStatus);
 
     private static JobRequirementsDto ToDto(RequirementsService.Report report) => new(
         report.JobId,

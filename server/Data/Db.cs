@@ -36,6 +36,63 @@ public sealed class Db
         Exec(conn, "PRAGMA mmap_size=0;");
         Exec(conn, "PRAGMA busy_timeout=15000;");
         ApplySchema(conn);
+        ApplyMigrations(conn);
+    }
+
+    /// <summary>
+    /// Column-level migrations, for databases that already exist.
+    ///
+    /// CREATE TABLE IF NOT EXISTS is enough while every release only adds tables: a table that is
+    /// absent gets created, and one that is present is left alone. It is not enough the moment a
+    /// release adds a *column*. An existing database keeps the shape it was created with, so the
+    /// CREATE silently does nothing and the query that reads the new column fails at runtime, on a
+    /// user's machine, with their data in it. There is no error at startup to warn anyone.
+    ///
+    /// So each column added after the first release gets one line here, and adding a column without
+    /// one is a bug that only an upgrading user would find. Idempotent, and cheap: a PRAGMA per
+    /// column at startup, against a local file.
+    ///
+    /// SQLite's ALTER TABLE ADD COLUMN is the only migration primitive available and it is enough,
+    /// because every column added here is nullable or has a constant default.
+    /// </summary>
+    private static readonly (string Table, string Column, string Definition)[] ColumnMigrations =
+    {
+        // Phase five: verification and closing dates. Both nullable, because a posting saved before
+        // this release was never verified and states no deadline, and NULL is the honest value.
+        ("jobs", "last_verified_at", "TEXT"),
+        ("jobs", "deadline_at", "TEXT"),
+        ("jobs", "status", "TEXT NOT NULL DEFAULT ''")
+    };
+
+    private static void ApplyMigrations(SqliteConnection conn)
+    {
+        foreach (var (table, column, definition) in ColumnMigrations)
+        {
+            if (HasColumn(conn, table, column)) continue;
+            try
+            {
+                Exec(conn, $"ALTER TABLE {table} ADD COLUMN {column} {definition};");
+            }
+            catch (SqliteException ex)
+            {
+                // A duplicate-column race (two processes starting at once) is not a failure worth
+                // stopping for. Anything else is: it means the database is not what we think, and
+                // carrying on would corrupt data later rather than now.
+                if (!ex.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase)) throw;
+            }
+        }
+    }
+
+    private static bool HasColumn(SqliteConnection conn, string table, string column)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table});";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     public string DatabasePath { get; private set; } = "";

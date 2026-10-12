@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 using ResuClean.Data;
 using ResuClean.Models;
@@ -22,7 +23,8 @@ public sealed class JobSearchService
         _http = http;
     }
 
-    private static string Now() => DateTime.UtcNow.ToString("O");
+    /// <summary>The current UTC timestamp, in the one format every column in this database uses.</summary>
+    internal static string Now() => DateTime.UtcNow.ToString("O");
 
     public sealed record Outcome(SearchSummary Summary, IReadOnlyList<JobDto> Jobs);
 
@@ -265,6 +267,62 @@ public sealed class JobSearchService
     // ---- Queries -----------------------------------------------------------
 
     /// <summary>
+    /// Records the outcome of checking a posting against the outside world.
+    ///
+    /// "Open" means the employer's own system answered. "Unverifiable" is a real outcome and is
+    /// stored as such rather than as open: a Cloudflare 403, a posting with no URL, or an
+    /// aggregator search page that resolved to the wrong company are all cases where nobody
+    /// confirmed anything, and a tracker that rounds those up to "live" is the false confidence
+    /// this column exists to remove.
+    ///
+    /// Only a success moves last_verified_at forward. A failure is recorded as its own status with
+    /// no new timestamp, because "we checked and could not tell" is not "we checked and it was there".
+    /// </summary>
+    public JobDto UpdateVerification(string jobId, string? lastVerifiedAt, string? deadlineAt, string status)
+    {
+        using var conn = _db.Open();
+
+        // COALESCE on both timestamps, deliberately. A null means "this check told us nothing new",
+        // not "erase what the last successful check told us". Writing the null straight through
+        // would blank the last_verified_at of every posting the moment a check failed — which is
+        // exactly backwards, since a failed check is the moment you most want to see when the last
+        // good answer was.
+        var updated = Db.Execute(conn,
+            "UPDATE jobs SET status = @status, last_verified_at = COALESCE(@lv, last_verified_at), " +
+            "deadline_at = COALESCE(@dl, deadline_at) WHERE id = @id",
+            Db.P("@id", jobId), Db.P("@lv", lastVerifiedAt), Db.P("@dl", deadlineAt), Db.P("@status", status));
+
+        if (updated == 0) throw new KeyNotFoundException($"No job called '{jobId}'.");
+        return GetJob(jobId)!;
+    }
+
+    /// <summary>
+    /// The verification status of one posting, from what we actually know rather than what we saved.
+    ///
+    /// The status column is a record of a check. This is the answer to "can I act on this today",
+    /// which also accounts for a stated closing date that has since passed — a posting can be
+    /// confirmed open this morning and still be closed tonight, and the tracker has to say so.
+    /// </summary>
+    public string EffectiveStatus(JobDto job)
+    {
+        // Closed and unverifiable both mean "do not act on this", and both outrank a deadline: a
+        // posting the board has taken down is closed whether or not its stated date has passed.
+        if (job.Status == "closed") return "closed";
+        if (job.Status == "unverifiable") return "unverifiable";
+
+        // A deadline is checked before the positive status, because a posting can be confirmed open
+        // this morning and have closed tonight, and the closing date is what the user acts on.
+        if (job.DeadlineAt is { } deadline &&
+            DateTime.TryParse(deadline, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var when) &&
+            when < DateTime.UtcNow) return "expired";
+
+        // Only an explicit confirmation counts as open. An empty status means nobody ever checked,
+        // and reporting that as "open" is the false confidence this whole mechanism exists to remove.
+        return job.Status == "open" ? "open" : "unknown";
+    }
+
+    /// <summary>
     /// Unmet blockers and unmet required items per job, as correlated subqueries. Counting them here
     /// rather than storing a column keeps the number honest: reclassifying a posting, or approving a
     /// fact that closes a gap, changes the ranking on the next read with no migration and no cache.
@@ -321,6 +379,7 @@ public sealed class JobSearchService
         var total = Convert.ToInt32(Db.Scalar(conn, "SELECT COUNT(*) FROM jobs" + where, parameters.ToArray()) ?? 0);
         var offset = (page - 1) * size;
         var sql = "SELECT id,title,company,location,url,posted_at,description,source_id,source_name,match_pct,remote,is_manual,best_version_id,created_at, " +
+                  "last_verified_at, deadline_at, status, " +
                   RequirementCounts + " FROM jobs" + where + " ORDER BY " + WinnabilityOrder + ", match_pct DESC, created_at DESC LIMIT @limit OFFSET @offset";
         var pageParameters = new List<SqliteParameter>(parameters)
         {
@@ -328,12 +387,17 @@ public sealed class JobSearchService
             Db.P("@offset", offset)
         };
 
-        var items = Db.Query(conn, sql, r => new JobDto(
-            Db.Str(r, "id"), Db.Str(r, "title"), Db.Str(r, "company"), Db.Str(r, "location"), Db.Str(r, "url"),
-            Db.StrOrNull(r, "posted_at"), Db.Str(r, "description"), Db.Str(r, "source_id"), Db.Str(r, "source_name"),
-            Db.Int(r, "match_pct"), Db.Bool(r, "remote"), Db.Bool(r, "is_manual"), Db.StrOrNull(r, "best_version_id"),
-            Db.Str(r, "created_at"), Db.Int(r, "unmet_blockers"), Db.Int(r, "unmet_required"),
-            Db.Int(r, "requirements_total") > 0), pageParameters.ToArray());
+        var items = Db.Query(conn, sql, r =>
+        {
+            var job = new JobDto(
+                Db.Str(r, "id"), Db.Str(r, "title"), Db.Str(r, "company"), Db.Str(r, "location"), Db.Str(r, "url"),
+                Db.StrOrNull(r, "posted_at"), Db.Str(r, "description"), Db.Str(r, "source_id"), Db.Str(r, "source_name"),
+                Db.Int(r, "match_pct"), Db.Bool(r, "remote"), Db.Bool(r, "is_manual"), Db.StrOrNull(r, "best_version_id"),
+                Db.Str(r, "created_at"), Db.Int(r, "unmet_blockers"), Db.Int(r, "unmet_required"),
+                Db.Int(r, "requirements_total") > 0,
+                Db.StrOrNull(r, "last_verified_at"), Db.StrOrNull(r, "deadline_at"), Db.Str(r, "status"));
+            return job with { EffectiveStatus = EffectiveStatus(job) };
+        }, pageParameters.ToArray());
 
         return new Paged<JobDto>(items, page, size, total);
     }
@@ -341,13 +405,17 @@ public sealed class JobSearchService
     public JobDto? GetJob(string id)
     {
         using var conn = _db.Open();
-        return Db.QueryOne(conn,
-            "SELECT id,title,company,location,url,posted_at,description,source_id,source_name,match_pct,remote,is_manual,best_version_id,created_at FROM jobs WHERE id = @id",
+        var job = Db.QueryOne(conn,
+            "SELECT id,title,company,location,url,posted_at,description,source_id,source_name,match_pct,remote,is_manual,best_version_id,created_at,last_verified_at,deadline_at,status FROM jobs WHERE id = @id",
             r => new JobDto(
                 Db.Str(r, "id"), Db.Str(r, "title"), Db.Str(r, "company"), Db.Str(r, "location"), Db.Str(r, "url"),
                 Db.StrOrNull(r, "posted_at"), Db.Str(r, "description"), Db.Str(r, "source_id"), Db.Str(r, "source_name"),
-                Db.Int(r, "match_pct"), Db.Bool(r, "remote"), Db.Bool(r, "is_manual"), Db.StrOrNull(r, "best_version_id"), Db.Str(r, "created_at")),
+                Db.Int(r, "match_pct"), Db.Bool(r, "remote"), Db.Bool(r, "is_manual"), Db.StrOrNull(r, "best_version_id"),
+                Db.Str(r, "created_at"), 0, 0, false,
+                Db.StrOrNull(r, "last_verified_at"), Db.StrOrNull(r, "deadline_at"), Db.Str(r, "status")),
             Db.P("@id", id));
+
+        return job is null ? null : job with { EffectiveStatus = EffectiveStatus(job) };
     }
 
     public JobDto SaveManualJob(SaveJobRequest request)

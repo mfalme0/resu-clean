@@ -224,6 +224,61 @@ public class JobQualityTests
         var report = Service(host).Analyse("job_1", Job());
         Assert.Equal("deterministic", report.Method);
     }
+
+    // ---- Closure ------------------------------------------------------------
+    // The Google case: a two-day-old posting whose deadline had passed, carried for several rounds
+    // of planning while its own page said "expired". Staleness cannot see that, because it only
+    // looks at the posted date.
+
+    [Fact]
+    public void A_posting_whose_own_deadline_passed_is_flagged_closed()
+    {
+        using var host = new TestHost();
+        var past = DateTime.UtcNow.AddDays(-3).ToString("O");
+        var report = Service(host).Analyse("job_1", Job(description: "", postedAt: DateTime.UtcNow.AddDays(-2).ToString("O")));
+
+        var job = Job(description: "", postedAt: DateTime.UtcNow.AddDays(-2).ToString("O")) with { DeadlineAt = past };
+        var withDeadline = Service(host).Analyse("job_1", job);
+
+        Assert.DoesNotContain(report.Flags, f => f.Kind == "closed");
+        var closed = Assert.Single(withDeadline.Flags, f => f.Kind == "closed");
+        Assert.Equal("warn", closed.Severity);
+        Assert.Contains("closing date", closed.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_posting_that_says_it_is_closed_is_flagged_even_with_no_dates()
+    {
+        using var host = new TestHost();
+        var report = Service(host).Analyse("job_1", Job(description: "This job listing has expired."));
+
+        var closed = Assert.Single(report.Flags, f => f.Kind == "closed");
+        Assert.Equal("warn", closed.Severity);
+    }
+
+    [Fact]
+    public void A_deadline_still_in_the_future_is_information_not_a_verdict()
+    {
+        using var host = new TestHost();
+        // Three days left is worth knowing, but it is not evidence the role is winnable.
+        var job = Job(description: "", postedAt: DateTime.UtcNow.AddDays(-1).ToString("O"))
+            with { DeadlineAt = DateTime.UtcNow.AddDays(3).ToString("O") };
+
+        var report = Service(host).Analyse("job_1", job);
+
+        Assert.DoesNotContain(report.Flags, f => f.Kind == "closed");
+        var deadline = Assert.Single(report.Flags, f => f.Kind == "deadline");
+        Assert.Equal("info", deadline.Severity);
+    }
+
+    [Fact]
+    public void A_posting_with_no_deadline_raises_no_closure_flag()
+    {
+        using var host = new TestHost();
+        var report = Service(host).Analyse("job_1", Job(description: "We are hiring a data engineer in Nairobi."));
+
+        Assert.DoesNotContain(report.Flags, f => f.Kind is "closed" or "deadline");
+    }
 }
 
 /// <summary>

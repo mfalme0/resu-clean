@@ -455,6 +455,22 @@ export interface Job {
   unmetRequired: number;
   /** False until the posting has been read. Unchecked is not the same as clear. */
   requirementsChecked: boolean;
+  /** When this was last confirmed open. Absent means never confirmed, which is not the same as open. */
+  lastVerifiedAt?: string;
+  /** A closing date the posting states. Absent means it states none. */
+  deadlineAt?: string;
+  /** The recorded outcome of the last check: open, closed or unverifiable. */
+  status: string;
+  /** What can be acted on today: open | closed | expired | unknown. */
+  effectiveStatus: 'open' | 'closed' | 'expired' | 'unverifiable' | 'unknown';
+}
+
+export interface JobVerification {
+  jobId: string;
+  status: string;
+  lastVerifiedAt?: string;
+  deadlineAt?: string;
+  effectiveStatus: string;
 }
 
 export interface JobRequirement {
