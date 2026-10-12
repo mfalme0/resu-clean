@@ -145,4 +145,16 @@ public class KeywordsTests
         var weak = Keywords.ScoreAgainst(posting, "chef pastry bakery");
         Assert.True(strong > weak, $"expected {strong} > {weak}");
     }
+
+    [Fact]
+    public void Ranking_does_not_credit_a_keyword_found_inside_a_longer_word()
+    {
+        // "dbt" inside a longer word is not evidence you use dbt, and a ranking that believes it
+        // puts the wrong posting on top of the list.
+        const string posting = "Analyst wanted: strong dbt and etl experience.";
+        var honest = Keywords.ScoreAgainst(posting, "Financial analyst for a debt recovery firm.");
+        var real = Keywords.ScoreAgainst(posting, "Built dbt models and etl pipelines.");
+
+        Assert.True(real > honest, $"expected {real} > {honest}");
+    }
 }

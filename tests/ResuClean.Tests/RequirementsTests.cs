@@ -135,6 +135,30 @@ public class RequirementsTests
     }
 
     [Fact]
+    public void A_short_requirement_word_does_not_match_inside_a_longer_word()
+    {
+        using var host = new TestHost();
+        // "api" is a real requirement word, and plain substring matching found it inside "capital".
+        // A requirement reported met on the strength of a finance role's employer name is worse
+        // than one reported unmet, because you only find out at the interview.
+        const string resume = "Reported on capital markets for a regional bank.";
+
+        Assert.False(RequirementsService.IsMet("Strong API design", resume));
+        Assert.Contains("api", RequirementsService.MissingParts("Strong API design", resume));
+    }
+
+    [Fact]
+    public void A_word_is_still_matched_when_it_stands_alone()
+    {
+        using var host = new TestHost();
+        // "design" is required and "Designed" is not it, so the resume says both plainly. The
+        // boundary rule has to be usable, not merely strict.
+        const string resume = "Set API design standards and wrote the design doc.";
+
+        Assert.True(RequirementsService.IsMet("Strong API design", resume));
+    }
+
+    [Fact]
     public void An_approved_fact_can_close_a_gap_that_the_resume_does_not()
     {
         using var host = new TestHost();

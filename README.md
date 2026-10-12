@@ -612,7 +612,7 @@ npm run smoke         # live API smoke test against a throwaway database
 npm run mem:measure   # regenerate the memory table above
 ```
 
-- **309 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
+- **312 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
   profile pending/dedupe/approval, router fallback with mock models, source parsing and field
   mapping from saved fixtures (no network), cross-source dedupe, `.eml`/`.zip` generation, key
   encryption at rest, robots.txt longest-match precedence, the seed pack invariants, requirement

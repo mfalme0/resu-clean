@@ -172,7 +172,7 @@ no external fonts or CDNs.
 
 | Layer | What it covers | Why it exists |
 |---|---|---|
-| `tests/ResuClean.Tests` (309) | Cleaner, ATS weighting, no-fabrication guard, profile pending/dedupe, router fallback with mock providers, source parsing from fixtures, dedupe, `.eml`/`.zip`, key encryption, requirement classification, posting quality, gap ramps, interview grounding, the rewrite gate and ledger, tracker transfer | The invariants above are worth pinning |
+| `tests/ResuClean.Tests` (312) | Cleaner, ATS weighting, no-fabrication guard, profile pending/dedupe, router fallback with mock providers, source parsing from fixtures, dedupe, `.eml`/`.zip`, key encryption, requirement classification, posting quality, gap ramps, interview grounding, the rewrite gate and ledger, tracker transfer | The invariants above are worth pinning |
 | `web/src/tests` (11) | Router, link interception, error envelope, op polling | Cheap confidence in the client contract |
 | `scripts/smoke-api.mjs` (62) | Live HTTP against a throwaway database, asserting payloads are our JSON shapes | Caught the serialised-`Task` bug that 13 endpoints shipped with |
 

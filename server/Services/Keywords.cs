@@ -161,7 +161,10 @@ public static partial class Keywords
         var postingKeywords = Extract(postingText, 40);
         if (postingKeywords.Count == 0 || string.IsNullOrWhiteSpace(resumeText)) return 0;
         var resumeLower = resumeText.ToLowerInvariant();
-        var hits = postingKeywords.Count(k => resumeLower.Contains(k, StringComparison.Ordinal));
+        // Boundary-aware for the same reason Compare is: a ranking inflated by "api" inside
+        // "capital" puts the wrong posting at the top of the list, and nobody notices until the
+        // cover letter is written.
+        var hits = postingKeywords.Count(k => ContainsTerm(resumeLower, k));
         return (int)Math.Round(hits * 100.0 / postingKeywords.Count);
     }
 
@@ -189,6 +192,17 @@ public static partial class Keywords
     }
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c);
+
+    /// <summary>
+    /// Does <paramref name="term"/> appear as a whole term in <paramref name="haystack"/>, either case?
+    ///
+    /// Shared by every scorer that asks "do I have this?", because each of them was wrong the same
+    /// way once: plain substring matching found "api" inside "capital", so a requirement came back
+    /// met on the strength of an employer's name. A false "met" is the expensive direction here —
+    /// it is the one you discover in the interview.
+    /// </summary>
+    public static bool ContainsTerm(string haystack, string term) =>
+        !string.IsNullOrEmpty(term) && OccursAsTerm(haystack.ToLowerInvariant(), term.ToLowerInvariant());
 
     private static int CountOccurrences(string haystack, string needle)
     {

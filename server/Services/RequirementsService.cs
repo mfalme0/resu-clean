@@ -212,7 +212,7 @@ public sealed partial class RequirementsService
         if (parts.Count == 0) return true;
 
         var haystack = evidence.ToLowerInvariant();
-        var found = parts.Count(p => haystack.Contains(p, StringComparison.Ordinal));
+        var found = parts.Count(p => Keywords.ContainsTerm(haystack, p));
         return found / (double)parts.Count >= 0.6;
     }
 
@@ -220,7 +220,7 @@ public sealed partial class RequirementsService
     public static List<string> MissingParts(string requirementText, string evidence)
     {
         var haystack = evidence.ToLowerInvariant();
-        return Salient(requirementText).Where(p => !haystack.Contains(p, StringComparison.Ordinal)).ToList();
+        return Salient(requirementText).Where(p => !Keywords.ContainsTerm(haystack, p)).ToList();
     }
 
     private static List<string> Salient(string text) =>

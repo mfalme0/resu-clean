@@ -140,7 +140,7 @@ public sealed partial class GapRampService
         {
             foreach (var term in terms)
             {
-                if (OccursAsTerm(lower, term))
+                if (Keywords.ContainsTerm(lower, term))
                 {
                     found.Add(concept);
                     break;
@@ -149,23 +149,6 @@ public sealed partial class GapRampService
         }
         return found;
     }
-
-    /// <summary>Word-boundary containment: terms must not match inside a longer word.</summary>
-    private static bool OccursAsTerm(string haystack, string term)
-    {
-        var index = 0;
-        while ((index = haystack.IndexOf(term, index, StringComparison.Ordinal)) >= 0)
-        {
-            var beforeOk = index == 0 || !IsWordChar(term[0]) || !IsWordChar(haystack[index - 1]);
-            var after = index + term.Length;
-            var afterOk = after >= haystack.Length || !IsWordChar(term[^1]) || !IsWordChar(haystack[after]);
-            if (beforeOk && afterOk) return true;
-            index += term.Length;
-        }
-        return false;
-    }
-
-    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c);
 
     private static HashSet<string> Tokens(string text) =>
         new(System.Text.RegularExpressions.Regex
