@@ -65,7 +65,10 @@ public sealed class Db
         // Where a source's postings come from. Unknown by default on purpose: a source we cannot
         // place is not an employer's own system, and pretending otherwise is what made an
         // aggregator look like evidence.
-        ("job_sources", "provenance", "TEXT NOT NULL DEFAULT 'unknown'")
+        ("job_sources", "provenance", "TEXT NOT NULL DEFAULT 'unknown'"),
+        // Separate from created_at, which is always "when this row was written". Without this an
+        // imported position you never applied to reports today as the application date.
+        ("applications", "applied_at", "TEXT")
     };
 
     private static void ApplyMigrations(SqliteConnection conn)

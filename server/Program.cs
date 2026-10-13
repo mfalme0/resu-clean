@@ -54,6 +54,8 @@ builder.Services.AddSingleton<GapRampService>();
 builder.Services.AddSingleton<InterviewService>();
 builder.Services.AddSingleton(provider => new TrackerTransfer(
     provider.GetRequiredService<Db>(), provider.GetRequiredService<JobSearchService>()));
+builder.Services.AddSingleton(provider => new PositionImport(
+    provider.GetRequiredService<Db>(), provider.GetRequiredService<JobSearchService>()));
 builder.Services.AddSingleton<ResumeWorkflows>();
 builder.Services.AddSingleton<OpRunner>();
 builder.Services.AddSingleton<ResuClean.Services.Search.WebSearchService>();

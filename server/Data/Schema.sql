@@ -157,8 +157,12 @@ CREATE TABLE IF NOT EXISTS applications (
   job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   kit_id      TEXT,
   version_id  TEXT NOT NULL DEFAULT '',
-  status      TEXT NOT NULL DEFAULT 'prepared', -- prepared | sent | replied | interview | rejected
+  status      TEXT NOT NULL DEFAULT 'prepared', -- prepared | sent | replied | interview | rejected | closed
   notes       TEXT NOT NULL DEFAULT '',
+  -- The date you actually applied, which is not the same as created_at. created_at is when the row
+  -- was written, so an imported or hand-added entry always has today's date; reading that as "you
+  -- applied today" invents an application you never made. Null means not known, and stays null.
+  applied_at  TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );

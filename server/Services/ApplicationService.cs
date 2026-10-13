@@ -262,15 +262,32 @@ public sealed class ApplicationService
         var versionId = request.ResumeVersionId ?? job.BestVersionId ?? "";
         var id = ProfileService.NewId("app");
         var now = Now();
+        var status = NormalizeStatus(request.Status);
 
         using var conn = _db.Open();
+
+        // An entry added here was added today, and if it starts at "sent" then today is also the
+        // day it was applied. Recording that in applied_at rather than leaving the export to infer
+        // it from created_at is what keeps the two facts separate everywhere else.
         Db.Exec(conn,
-            "INSERT INTO applications (id, job_id, kit_id, version_id, status, notes, created_at, updated_at) VALUES (@id,@j,@k,@v,@s,@n,@c,@c)",
+            "INSERT INTO applications (id, job_id, kit_id, version_id, status, notes, applied_at, created_at, updated_at) "
+            + "VALUES (@id,@j,@k,@v,@s,@n,@a,@c,@c)",
             Db.P("@id", id), Db.P("@j", request.JobId), Db.P("@k", request.KitId ?? ""), Db.P("@v", versionId),
-            Db.P("@s", NormalizeStatus(request.Status)), Db.P("@n", request.Notes ?? ""), Db.P("@c", now));
+            Db.P("@s", status), Db.P("@n", request.Notes ?? ""),
+            Db.P("@a", AppliedOn(status, now)), Db.P("@c", now));
 
         return Db.QueryOne(conn, TrackerSelect + " WHERE a.id = @id", MapTracker, Db.P("@id", id))!;
     }
+
+    /// <summary>
+    /// The application date implied by a stage, or null when there is none.
+    ///
+    /// Only the stages that mean something was actually sent carry a date. "todo" has not been
+    /// applied to, and "closed" means the posting is gone rather than that anything was sent —
+    /// stamping either with today would put an application into the record that never happened.
+    /// </summary>
+    private static string? AppliedOn(string status, string now) =>
+        status is "sent" or "replied" or "interview" ? now : null;
 
     public TrackerDto PatchTracker(string id, PatchTrackerRequest request)
     {
@@ -283,12 +300,21 @@ public sealed class ApplicationService
             VersionId = Db.Str(r, "version_id")
         }, Db.P("@id", id)) ?? throw new KeyNotFoundException($"Tracker entry '{id}' does not exist.");
 
-        Db.Exec(conn, "UPDATE applications SET status=@s, notes=@n, kit_id=@k, version_id=@v, updated_at=@t WHERE id=@id",
-            Db.P("@s", request.Status is null ? current.Status : NormalizeStatus(request.Status)),
+        var status = request.Status is null ? current.Status : NormalizeStatus(request.Status);
+        var now = Now();
+
+        // The application date is stamped once, when the entry first moves to a stage that means
+        // something was sent, and never rewritten afterwards. Moving from sent to interview is not
+        // a second application, and backdating it to today each time would lose the real date.
+        Db.Exec(conn,
+            "UPDATE applications SET status=@s, notes=@n, kit_id=@k, version_id=@v, "
+            + "applied_at = COALESCE(applied_at, @a), updated_at=@t WHERE id=@id",
+            Db.P("@s", status),
             Db.P("@n", request.Notes ?? current.Notes),
             Db.P("@k", request.KitId ?? current.KitId),
             Db.P("@v", request.ResumeVersionId ?? current.VersionId),
-            Db.P("@t", Now()), Db.P("@id", id));
+            Db.P("@a", AppliedOn(status, now)),
+            Db.P("@t", now), Db.P("@id", id));
 
         return Db.QueryOne(conn, TrackerSelect + " WHERE a.id = @id", MapTracker, Db.P("@id", id))!;
     }
@@ -357,6 +383,11 @@ private static readonly Regex EmailRegex = new(@"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\
             "replied" => "replied",
             "interview" or "interviewed" => "interview",
             "rejected" => "rejected",
+            // "closed" means the posting itself is gone, which is a different fact from being
+            // rejected: you were never turned down. It is kept apart because collapsing the two
+            // turns a dead link into a personal outcome, and importing an external tracker full of
+            // closed roles as "rejected" is exactly how that happened.
+            "closed" => "closed",
             _ => "prepared"
         };
     }

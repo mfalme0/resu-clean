@@ -86,5 +86,38 @@ public static class KitEndpoints
         /// </summary>
         group.MapPost("/import", (ImportTrackerRequest body, TrackerTransfer transfer) =>
             Api.Guard(() => Task.FromResult(Api.Ok(transfer.ImportJson(body.Json ?? "", body.Overwrite ?? false)))));
+
+        // ---- Importing positions tracked elsewhere ---------------------------
+
+        /// <summary>
+        /// Reads a position file and works out what each entry would become, without writing anything.
+        ///
+        /// Preview first, always. The extraction is the interesting part — a company, a title, a
+        /// location and a posting URL pulled out of a sentence somebody wrote — and it is exactly
+        /// the kind of thing a person should see before it lands in their tracker.
+        /// </summary>
+        group.MapPost("/import-positions/preview", (ImportPositionsRequest body, PositionImport importer) =>
+            Api.Guard(() =>
+            {
+                var preview = importer.Parse(body.Json ?? "");
+                return Task.FromResult(Api.Ok(new PositionPreviewDto(
+                    preview.Total,
+                    preview.Positions.Select(p => new ParsedPositionDto(
+                        p.Key, p.Stage, p.Company, p.Title, p.Location, p.Url, p.DeadlineAt,
+                        p.Verified, p.Applied, p.Updated, p.Note, p.Missing)).ToList(),
+                    preview.Warnings)));
+            }));
+
+        /// <summary>
+        /// Writes the positions. One job and one application per entry, keyed on the file's own key
+        /// so re-running updates rather than duplicating.
+        /// </summary>
+        group.MapPost("/import-positions", (ImportPositionsRequest body, PositionImport importer) =>
+            Api.Guard(() =>
+            {
+                var result = importer.Import(body.Json ?? "", body.Overwrite ?? false);
+                return Task.FromResult(Api.Ok(new PositionImportResultDto(
+                    result.Imported, result.Created, result.Updated, result.Skipped, result.Warnings)));
+            }));
     }
 }

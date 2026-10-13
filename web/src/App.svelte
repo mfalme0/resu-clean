@@ -14,6 +14,7 @@
     refreshPendingCount
   } from './lib/store';
   import { hasApiKey, setApiKey } from './lib/api';
+  import { THEMES, setTheme, type Theme } from './main';
 
   type RouteComponent = Component<Record<string, never>>;
 
@@ -25,6 +26,7 @@
   let keyDraft = '';
   let online = true;
   let edition = '';
+  let current: Theme = 'newsprint';
 
   const navIcons: Record<string, 'doc' | 'book' | 'search' | 'compass' | 'mail' | 'list' | 'gear'> = {
     '/': 'doc',
@@ -50,6 +52,7 @@
     document.addEventListener('click', handleLink);
 
     edition = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    current = (document.documentElement.getAttribute('data-theme') as Theme) ?? 'newsprint';
     online = (await health()) !== null;
     await loadSystem();
     await refreshPendingCount();
@@ -85,6 +88,11 @@
     showKeyPrompt = false;
     void loadSystem();
     void refreshPendingCount();
+  }
+
+  function chooseTheme(theme: Theme) {
+    setTheme(theme);
+    current = theme;
   }
 
   $: pending = $pendingCount;
@@ -220,6 +228,18 @@
       <span class="label">Colophon</span>
       <span class="meta">Edition: Vol 1.0</span>
       <span class="meta">Set in the reader's own faces.</span>
+      <span class="label theme-label">Theme</span>
+      <div class="theme-picker" role="group" aria-label="Colour theme">
+        {#each THEMES as theme (theme)}
+          <button
+            type="button"
+            class="theme-btn"
+            class:current={current === theme}
+            aria-pressed={current === theme}
+            on:click={() => chooseTheme(theme)}
+          >{theme}</button>
+        {/each}
+      </div>
       {#if $memory}
         <span class="meta">Backend {$memory.rssMb} MB resident &middot; {$memory.opsActive} ops running</span>
       {/if}
@@ -401,6 +421,42 @@
 
   .footer .meta {
     margin: 0;
+  }
+
+  /* Theme picker. Small, in the colophon where nothing load-bearing lives, because a theme is a
+     preference and preferences do not belong in the masthead. */
+  .theme-label {
+    margin-top: var(--s3);
+  }
+
+  .theme-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s1);
+  }
+
+  .theme-btn {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 4px 8px;
+    min-height: 28px;
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid currentColor;
+    cursor: pointer;
+  }
+
+  .theme-btn:hover {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  .theme-btn.current {
+    background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
   }
 
   .footer-strip {

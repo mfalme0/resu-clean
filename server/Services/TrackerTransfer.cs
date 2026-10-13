@@ -44,7 +44,9 @@ public sealed class TrackerTransfer
         "applied" or "sent" or "submitted" => "sent",
         "replied" or "response" => "replied",
         "interview" or "interviewed" => "interview",
-        "rejected" or "closed" => "rejected",
+        "rejected" => "rejected",
+        // Kept as itself rather than folded into rejected: see ApplicationService.NormalizeStatus.
+        "closed" => "closed",
         _ => "prepared"
     };
 
@@ -67,7 +69,7 @@ public sealed class TrackerTransfer
     public string ExportJson(bool includeAnalysis = true)
     {
         var rows = Db.Query(_db.Open(),
-            "SELECT a.id, a.status, a.notes, a.created_at, a.updated_at, COALESCE(j.company,'') AS company, "
+            "SELECT a.id, a.status, a.notes, a.created_at, a.updated_at, COALESCE(a.applied_at,'') AS applied_at, COALESCE(j.raw,'') AS raw, COALESCE(j.company,'') AS company, "
             + "COALESCE(j.title,'') AS title, COALESCE(j.url,'') AS url, COALESCE(j.posted_at,'') AS posted, "
             + "COALESCE(j.match_pct,0) AS match_pct, COALESCE(j.status,'') AS verify_status, "
             + "COALESCE(j.last_verified_at,'') AS verified_at, COALESCE(j.deadline_at,'') AS deadline "
@@ -87,6 +89,8 @@ public sealed class TrackerTransfer
                 VerifiedAt = Db.Str(r, "verified_at"),
                 DeadlineAt = Db.Str(r, "deadline"),
                 Created = Db.Str(r, "created_at"),
+                Applied = Db.Str(r, "applied_at"),
+                Raw = Db.Str(r, "raw"),
                 Updated = Db.Str(r, "updated_at")
             }, Array.Empty<Microsoft.Data.Sqlite.SqliteParameter>());
 
@@ -100,7 +104,11 @@ public sealed class TrackerTransfer
         var payload = new SortedDictionary<string, TrackerExportEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
         {
-            var key = Slug(row.Company) is { Length: > 0 } c ? c : Slug(row.Title);
+            // A position that came from an import keeps its own key, because keying on the company would
+            // collapse four Jumia roles into one entry and silently drop three of them. Jobs added
+            // through the tracker itself have no such key and fall back to the company as before.
+            var importedKey = ImportKey(row.Raw);
+            var key = importedKey.Length > 0 ? importedKey : Slug(row.Company) is { Length: > 0 } c ? c : Slug(row.Title);
             if (key.Length == 0 || !seen.Add(key)) continue;
             var todo = row.Stage == "todo";
 
@@ -108,7 +116,10 @@ public sealed class TrackerTransfer
             {
                 Stage = row.Stage,
                 Note = row.Note,
-                Applied = todo ? "" : ShortDate(row.Created),
+                // applied_at only. created_at is when the row was written, which for an import is today
+                // whatever the file said, so reading it here is how "never applied" became "applied
+                // on the day you imported it". Whoever creates the row is what stamps this.
+                Applied = todo ? "" : ShortDate(row.Applied),
                 Updated = todo ? "" : ShortDate(row.Updated)
             };
 
@@ -151,6 +162,26 @@ public sealed class TrackerTransfer
     /// <summary>ISO date only. The timestamps in the database carry a time nobody tracks by.</summary>
     private static string ShortDate(string iso) =>
         DateTime.TryParse(iso, out var when) ? when.ToString("yyyy-MM-dd") : "";
+
+    /// <summary>
+    /// The key a position was imported under, read back out of the job's raw JSON.
+    /// Empty when there is none, which is every job the user added themselves.
+    /// </summary>
+    private static string ImportKey(string raw)
+    {
+        if (raw.Length == 0) return "";
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.TryGetProperty("importKey", out var v) && v.ValueKind == JsonValueKind.String
+                ? (v.GetString() ?? "")
+                : "";
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
+    }
 
     public TrackerImportSummary ImportJson(string json, bool overwrite)
     {
@@ -200,24 +231,27 @@ public sealed class TrackerTransfer
 
                 if (existingId is not null && !overwrite) { summary.Skipped.Add($"{key}: already tracked."); continue; }
 
-                // A todo entry has no applied date; a row that was already sent keeps its real one.
-                var created = DateTime.TryParse(applied, out var a) ? a.ToString("O") : now;
+                // A todo entry has no applied date, and neither does a file that omits one. Only a
+                // stated date is written; created_at is when the row was written, which is a
+                // different fact and was previously being read back as an application you never made.
+                var appliedAt = DateTime.TryParse(applied, out var a) ? a.ToString("O") : null;
+                var created = appliedAt ?? now;
                 var touched = DateTime.TryParse(updated, out var u) ? u.ToString("O") : now;
 
                 if (existingId is null)
                 {
                     Db.Exec(conn,
-                        "INSERT INTO applications (id, job_id, kit_id, version_id, status, notes, created_at, updated_at) "
-                        + "VALUES (@id,@j,'','',@s,@n,@c,@t)",
+                        "INSERT INTO applications (id, job_id, kit_id, version_id, status, notes, applied_at, created_at, updated_at) "
+                        + "VALUES (@id,@j,'','',@s,@n,@a,@c,@t)",
                         Db.P("@id", ProfileService.NewId("app")), Db.P("@j", jobId), Db.P("@s", status),
-                        Db.P("@n", note), Db.P("@c", created), Db.P("@t", touched));
+                        Db.P("@n", note), Db.P("@a", appliedAt), Db.P("@c", created), Db.P("@t", touched));
                     summary.Created++;
                 }
                 else
                 {
-                    Db.Exec(conn, "UPDATE applications SET status=@s, notes=@n, created_at=@c, updated_at=@t WHERE id=@id",
-                        Db.P("@s", status), Db.P("@n", note), Db.P("@c", created), Db.P("@t", touched),
-                        Db.P("@id", existingId));
+                    Db.Exec(conn, "UPDATE applications SET status=@s, notes=@n, applied_at=COALESCE(@a, applied_at), created_at=@c, updated_at=@t WHERE id=@id",
+                        Db.P("@s", status), Db.P("@n", note), Db.P("@a", appliedAt), Db.P("@c", created),
+                        Db.P("@t", touched), Db.P("@id", existingId));
                     summary.Updated++;
                 }
                 summary.Imported++;

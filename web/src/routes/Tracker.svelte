@@ -1,18 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, type Paged, type TrackerEntry, type TrackerImportResult } from '../lib/api';
+  import { api, type Paged, type PositionImportResult, type PositionPreview, type TrackerEntry, type TrackerImportResult } from '../lib/api';
   import { flash } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import Notice from '../lib/ui/Notice.svelte';
 
-  const STATUSES = ['prepared', 'sent', 'replied', 'interview', 'rejected'] as const;
+  const STATUSES = ['prepared', 'sent', 'replied', 'interview', 'rejected', 'closed'] as const;
   const STATUS_NOTES: Record<string, string> = {
     prepared: 'Kit assembled, nothing sent yet.',
     sent: 'You sent it yourself. Nothing was sent by the tool.',
     replied: 'They came back to you.',
     interview: 'You are at an interview stage.',
-    rejected: 'Closed. Keep the notes for the next one.'
+    rejected: 'They turned you down. Keep the notes for the next one.',
+    // Kept apart from rejected on purpose: the posting is gone, which says nothing about whether
+    // anyone looked at your application.
+    closed: 'The posting itself is closed. Different from being rejected.'
   };
 
   let entries: Paged<TrackerEntry> = { items: [], page: 1, size: 50, total: 0, pages: 0, hasMore: false };
@@ -25,6 +28,51 @@
   let importText = '';
   let overwrite = false;
   let importResult: TrackerImportResult | null = null;
+
+  // Positions tracked elsewhere: per role rather than per company, and read for the posting URL,
+  // title and location hiding in the note.
+  let positionsOpen = false;
+  let positionsText = '';
+  let positionPreview: PositionPreview | null = null;
+  let positionResult: PositionImportResult | null = null;
+  let previewing = false;
+
+  /**
+   * Reads the file and shows what each entry would become, without writing anything.
+   *
+   * Preview first because the extraction is the interesting part: a posting URL and a role title
+   * pulled out of a sentence someone wrote. That is worth checking before it lands in your tracker,
+   * and worth seeing which entries carry nothing to extract.
+   */
+  async function previewPositions() {
+    if (positionsText.trim().length === 0) return;
+    previewing = true;
+    try {
+      positionPreview = await api.post<PositionPreview>('/tracker/import-positions/preview', { json: positionsText });
+      positionResult = null;
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      previewing = false;
+    }
+  }
+
+  async function importPositions() {
+    if (positionsText.trim().length === 0) return;
+    previewing = true;
+    try {
+      positionResult = await api.post<PositionImportResult>('/tracker/import-positions', {
+        json: positionsText,
+        overwrite
+      });
+      await load(1);
+      flash(`Imported ${positionResult.imported} position${positionResult.imported === 1 ? '' : 's'}.`);
+    } catch (err) {
+      flash(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      previewing = false;
+    }
+  }
 
   onMount(() => load(1));
 
@@ -188,6 +236,100 @@
         hint={importResult.skipped.length > 0 ? 'Tick the overwrite box to replace entries that already exist.' : undefined}
       />
     {/if}
+  {/if}
+
+  <div class="transfer">
+    <p class="meta">
+      <strong>Positions tracked somewhere else.</strong> Same file shape, but one entry per role
+      rather than one per company — so four Jumia roles stay four roles — and the note is read for a
+      posting URL, a title, a location and any closing date it names.
+    </p>
+    <div class="transfer-actions">
+      <button type="button" class="btn" on:click={() => { positionsOpen = !positionsOpen; positionResult = null; }}>
+        {positionsOpen ? 'Close position import' : 'Import positions…'}
+      </button>
+    </div>
+  </div>
+
+  {#if positionsOpen}
+    <div class="panel">
+      <label class="label" for="positions-json">Paste your position file</label>
+      <textarea
+        id="positions-json"
+        class="textarea mono-area"
+        bind:value={positionsText}
+        placeholder={'{\n  "jumia_nodejs": {\n    "stage": "closed",\n    "note": "Jumia - Senior NodeJS Software Engineer (Nairobi). https://jobs.example/123",\n    "applied": "",\n    "updated": "2026-10-12"\n  }\n}'}
+      ></textarea>
+
+      <div class="transfer-actions">
+        <button type="button" class="btn" on:click={previewPositions} disabled={positionsText.trim().length === 0}>
+          Preview
+        </button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          on:click={importPositions}
+          disabled={positionsText.trim().length === 0 || previewing}
+        >
+          {previewing ? 'Importing…' : 'Import'}
+        </button>
+      </div>
+
+      <p class="meta">
+        An empty <span class="mono">applied</span> stays empty. Nothing is dated on your behalf: a file
+        that says you never applied to something must not come back saying you applied today.
+      </p>
+
+      {#if positionPreview}
+        <Rule text="What will be created" note="{positionPreview.total} position{positionPreview.total === 1 ? '' : 's'}" />
+        <table class="data import-table">
+          <thead>
+            <tr><th>Key</th><th>Stage</th><th>Role</th><th>Where</th><th>Posting</th></tr>
+          </thead>
+          <tbody>
+            {#each positionPreview.positions as p (p.key)}
+              <tr>
+                <td class="mono">{p.key}</td>
+                <td><span class="badge">{p.stage}</span></td>
+                <td>
+                  {p.title ?? p.key}
+                  {#if p.verified}
+                    <span class="badge badge-pass">{p.verified}</span>
+                  {/if}
+                  {#if p.deadlineAt}
+                    <span class="meta">closes {p.deadlineAt.slice(0, 10)}</span>
+                  {/if}
+                </td>
+                <td class="mono">{p.location || p.company || '—'}</td>
+                <td class="mono import-url">
+                  {#if p.url}
+                    <a href={p.url} target="_blank" rel="noopener noreferrer">link</a>
+                  {:else}
+                    <span class="meta">none found</span>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="meta">
+          {positionPreview.positions.filter((p) => p.missing.length > 0).length} of these have no title or
+          posting URL in the note, and will use your key as the label. Add the URL by hand afterwards so
+          the role can be re-verified.
+        </p>
+        {#if positionPreview.warnings.length > 0}
+          <Notice tone="info" title="Some entries were skipped" message={positionPreview.warnings.join('; ')} />
+        {/if}
+      {/if}
+
+      {#if positionResult}
+        <Notice
+          tone="info"
+          title="{positionResult.imported} imported: {positionResult.created} new, {positionResult.updated} updated"
+          message={positionResult.skipped.length > 0 ? 'Left alone: ' + positionResult.skipped.join('; ') : 'Every position in the file is now tracked.'}
+        />
+      {/if}
+    </div>
   {/if}
 
   <div class="tally">
@@ -377,6 +519,17 @@
     font-family: var(--font-mono);
     font-size: 0.85rem;
     min-height: 12rem;
+  }
+
+  /* The import preview. Kept compact because there can be thirty of them, and the point is to
+     scan the extracted role and posting link rather than read a table. */
+  .import-table td {
+    vertical-align: top;
+    font-size: 0.875rem;
+  }
+
+  .import-url a {
+    color: var(--accent);
   }
 
   .check {

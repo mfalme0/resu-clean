@@ -742,6 +742,38 @@ export interface TrackerImportResult {
   skipped: string[];
 }
 
+/** What one position import did. */
+export interface PositionImportResult {
+  imported: number;
+  created: number;
+  updated: number;
+  skipped: string[];
+  warnings: string[];
+}
+
+/** One position as the importer read it, before anything is written. */
+export interface ParsedPosition {
+  key: string;
+  stage: string;
+  company?: string;
+  title?: string;
+  location?: string;
+  url?: string;
+  deadlineAt?: string;
+  verified?: string;
+  applied: string;
+  updated: string;
+  note: string;
+  /** Fields the note did not carry, so they can be filled in by hand. */
+  missing: string[];
+}
+
+export interface PositionPreview {
+  total: number;
+  positions: ParsedPosition[];
+  warnings: string[];
+}
+
 /** What the model calls have cost, per workflow and in total. */
 export interface ModelUsageSummaryRow {
   workflow: string;

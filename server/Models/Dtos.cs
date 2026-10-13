@@ -557,6 +557,44 @@ public sealed record ImportTrackerRequest
     public bool? Overwrite { get; init; }
 }
 
+// ---- Importing positions tracked elsewhere -------------------------------------
+
+public sealed record ImportPositionsRequest
+{
+    /// <summary>The pasted file contents: one key per position.</summary>
+    public string? Json { get; init; }
+    /// <summary>Update positions already imported under the same key. Off by default.</summary>
+    public bool? Overwrite { get; init; }
+}
+
+/// <summary>What one position would become, read out of its note where possible.</summary>
+/// <param name="Missing">Fields the note did not carry, named so they can be filled in by hand.</param>
+public sealed record ParsedPositionDto(
+    string Key,
+    string Stage,
+    string? Company,
+    string? Title,
+    string? Location,
+    string? Url,
+    string? DeadlineAt,
+    string? Verified,
+    string Applied,
+    string Updated,
+    string Note,
+    IReadOnlyList<string> Missing);
+
+public sealed record PositionPreviewDto(
+    int Total,
+    IReadOnlyList<ParsedPositionDto> Positions,
+    IReadOnlyList<string> Warnings);
+
+public sealed record PositionImportResultDto(
+    int Imported,
+    int Created,
+    int Updated,
+    IReadOnlyList<string> Skipped,
+    IReadOnlyList<string> Warnings);
+
 // ---- Models / routing -------------------------------------------------------
 
 public sealed record ProviderDto(
