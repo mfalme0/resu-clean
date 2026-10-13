@@ -65,7 +65,8 @@ public static class SourceEndpoints
                 var detection = await detector.DetectAsync(http, body.Url.Trim(), body.Query, body.Location, ct).ConfigureAwait(false);
                 return Api.Ok(new DetectSourceResponse(
                     detection.Url, detection.SuggestedType, detection.Confidence, detection.FeedUrl,
-                    detection.Candidates, detection.Preview, detection.Notes, true, null));
+                    detection.Candidates, detection.Preview, detection.Notes, true, null,
+                    detection.Provenance));
             }));
 
         /// <summary>Dry run against an unsaved source definition.</summary>

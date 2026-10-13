@@ -10,7 +10,8 @@ namespace ResuClean.Services.Sources;
 public sealed partial class SourceDetector
 {
     public sealed record Detection(string Url, string SuggestedType, string Confidence, string? FeedUrl,
-        IReadOnlyList<string> Candidates, IReadOnlyList<SourcePreviewItem> Preview, IReadOnlyList<string> Notes);
+        IReadOnlyList<string> Candidates, IReadOnlyList<SourcePreviewItem> Preview, IReadOnlyList<string> Notes,
+        string Provenance = SourceProvenance.Unknown);
 
     private static readonly string[] CommonFeedPaths =
     {
@@ -40,19 +41,29 @@ public sealed partial class SourceDetector
         var candidates = new List<string>();
         var normalized = url.Trim();
 
+        // Who is authoritative about this posting, decided from the host before anything is fetched.
+        // Surfaced so the user knows whether a later 404 means anything.
+        var provenance = SourceProvenance.For(normalized);
+        if (provenance == SourceProvenance.Aggregator)
+            notes.Add("This is a third-party index. A listing here can outlive the employer's own posting, " +
+                "so it cannot confirm the role is still open.");
+        else if (provenance == SourceProvenance.Unknown && Uri.TryCreate(normalized, UriKind.Absolute, out _))
+            notes.Add("Could not tell whose system this is, so treat anything found here as unverified.");
+
         if (!Uri.TryCreate(normalized, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
         {
             // Not fetchable: hand back a search link so the workflow still works.
             return new Detection(normalized, "link", "low", null, candidates,
                 Array.Empty<SourcePreviewItem>(),
-                new[] { "That is not an http(s) URL, so it cannot be fetched automatically. Save it as a 'link' source: resu-clean will build the search URL and you open it in your browser." });
+                new[] { "That is not an http(s) URL, so it cannot be fetched automatically. Save it as a 'link' source: resu-clean will build the search URL and you open it in your browser." },
+                provenance);
         }
 
         var robots = await http.IsAllowedAsync(uri, ct).ConfigureAwait(false);
         if (!robots.Allowed)
         {
             notes.Add($"robots.txt disallows this path ({robots.Reason}). Saving as a 'link' source is the right choice.");
-            return new Detection(normalized, "link", "high", null, candidates, Array.Empty<SourcePreviewItem>(), notes);
+            return new Detection(normalized, "link", "high", null, candidates, Array.Empty<SourcePreviewItem>(), notes, provenance);
         }
 
         // Probe the URL itself.
@@ -66,7 +77,7 @@ public sealed partial class SourceDetector
         {
             notes.Add("This URL returns a valid RSS/Atom feed.");
             var preview = await PreviewAsync(http, normalized, "rss", new Dictionary<string, string>(), new Dictionary<string, string>(), query, location, ct);
-            return new Detection(normalized, "rss", "high", normalized, candidates, preview, notes);
+            return new Detection(normalized, "rss", "high", normalized, candidates, preview, notes, provenance);
         }
 
         // 2. JSON?
@@ -82,7 +93,7 @@ public sealed partial class SourceDetector
             var preview = looksLikeJobs
                 ? await PreviewAsync(http, normalized, "json", DefaultJsonMap, new Dictionary<string, string>(), query, location, ct)
                 : Array.Empty<SourcePreviewItem>();
-            return new Detection(normalized, type, looksLikeJobs ? "medium" : "low", null, candidates, preview, notes);
+            return new Detection(normalized, type, looksLikeJobs ? "medium" : "low", null, candidates, preview, notes, provenance);
         }
 
         // 3. HTML: look for advertised feeds.
@@ -91,7 +102,7 @@ public sealed partial class SourceDetector
             if (BotWall().IsMatch(body))
             {
                 notes.Add("This page looks like bot protection, not a job list. Save it as a 'link' source.");
-                return new Detection(normalized, "link", "medium", null, candidates, Array.Empty<SourcePreviewItem>(), notes);
+                return new Detection(normalized, "link", "medium", null, candidates, Array.Empty<SourcePreviewItem>(), notes, provenance);
             }
 
             foreach (var feed in FindFeedLinks(body, uri))
@@ -106,7 +117,7 @@ public sealed partial class SourceDetector
                 if (GuessContentType(feedResult.Body) != "feed") continue;
                 notes.Add($"Found a working feed advertised by the page: {feed}");
                 var preview = await PreviewAsync(http, feed, "rss", new Dictionary<string, string>(), new Dictionary<string, string>(), query, location, ct);
-                return new Detection(feed, "rss", "high", feed, candidates, preview, notes);
+                return new Detection(feed, "rss", "high", feed, candidates, preview, notes, SourceProvenance.For(feed));
             }
 
             // Try well-known feed paths on the same host.
@@ -118,17 +129,17 @@ public sealed partial class SourceDetector
                 if (GuessContentType(probe.Body) != "feed") continue;
                 notes.Add($"No feed link was advertised, but {candidate} returns a valid feed. This is almost certainly the site's job feed.");
                 var preview = await PreviewAsync(http, candidate, "rss", new Dictionary<string, string>(), new Dictionary<string, string>(), query, location, ct);
-                return new Detection(candidate, "rss", "medium", candidate, candidates, preview, notes);
+                return new Detection(candidate, "rss", "medium", candidate, candidates, preview, notes, SourceProvenance.For(candidate));
             }
 
             notes.Add("This is an HTML page with no advertised feed. Provide CSS selectors for the listing to parse it, or save it as a 'link' source if the site disallows automated access.");
             var linkTitle = HtmlTitle().Match(body) is { Success: true } m ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value).Trim() : normalized;
             return new Detection(normalized, "html", "low", null, candidates,
-                new[] { new SourcePreviewItem(linkTitle, "", "", normalized, "", "", 0) }, notes);
+                new[] { new SourcePreviewItem(linkTitle, "", "", normalized, "", "", 0) }, notes, provenance);
         }
 
         notes.Add("The response was empty or not HTML/XML/JSON. Save it as a 'link' source.");
-        return new Detection(normalized, "link", "low", null, candidates, Array.Empty<SourcePreviewItem>(), notes);
+        return new Detection(normalized, "link", "low", null, candidates, Array.Empty<SourcePreviewItem>(), notes, provenance);
     }
 
     /// <summary>Finds &lt;link rel="alternate" type="application/rss+xml"&gt; hrefs.</summary>

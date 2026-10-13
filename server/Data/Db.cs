@@ -61,7 +61,11 @@ public sealed class Db
         // this release was never verified and states no deadline, and NULL is the honest value.
         ("jobs", "last_verified_at", "TEXT"),
         ("jobs", "deadline_at", "TEXT"),
-        ("jobs", "status", "TEXT NOT NULL DEFAULT ''")
+        ("jobs", "status", "TEXT NOT NULL DEFAULT ''"),
+        // Where a source's postings come from. Unknown by default on purpose: a source we cannot
+        // place is not an employer's own system, and pretending otherwise is what made an
+        // aggregator look like evidence.
+        ("job_sources", "provenance", "TEXT NOT NULL DEFAULT 'unknown'")
     };
 
     private static void ApplyMigrations(SqliteConnection conn)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, waitForOp, type DetectResult, type GapRamp, type InterviewPrep, type Job, type JobQuality, type JobRequirements, type Paged, type SearchOutcome, type Source, type SourcePack, type TestResult, type ResumeSummary } from '../lib/api';
+  import { api, waitForOp, asProvenance, PROVENANCE_NOTE, type DetectResult, type GapRamp, type InterviewPrep, type Job, type JobQuality, type JobRequirements, type Paged, type Provenance, type SearchOutcome, type Source, type SourcePack, type TestResult, type ResumeSummary } from '../lib/api';
   import { flash } from '../lib/store';
   import Rule from '../lib/ui/Rule.svelte';
   import Empty from '../lib/ui/Empty.svelte';
@@ -8,6 +8,18 @@
 
   const tabs = ['Search', 'Saved jobs', 'Add a job', 'Sources', 'Packs'] as const;
   let tab: (typeof tabs)[number] = 'Search';
+
+  /**
+   * Short labels for the source list. The full explanation lives in PROVENANCE_NOTE and is the
+   * tooltip: the list has no room for a sentence per row, and a bare word nobody can interpret is
+   * worse than no label at all.
+   */
+  const PROVENANCE_LABEL: Record<Provenance, string> = {
+    employer_ats: 'employer ATS',
+    aggregator: 'aggregator',
+    board: 'board',
+    unknown: 'unknown source'
+  };
 
   let query = '';
   let location = '';
@@ -296,7 +308,10 @@
         urlTemplate: detection.suggestedType === 'link' ? detection.url : null,
         regions: ['global'],
         enabled: detection.suggestedType !== 'link',
-        notes: detection.notes.join(' ')
+        notes: detection.notes.join(' '),
+        // Preserved from detection rather than re-derived, so what the user was shown when they
+        // decided to add this is what gets stored.
+        provenance: asProvenance(detection.provenance)
       });
       detection = null;
       detectUrl = '';
@@ -749,12 +764,22 @@
     </div>
 
     {#if detection}
+      {@const provenance = asProvenance(detection.provenance)}
       <div class="detection">
         <div class="detect-head">
           <span class="badge" class:badge-accent={detection.suggestedType === 'link'}>{detection.suggestedType}</span>
           <span class="meta">{detection.confidence} confidence</span>
+          <!--
+            Shown at detection time, before anything is saved, because the decision to add a source
+            depends on it: an aggregator is a convenience and only the employer's own board can
+            later tell you the posting is gone.
+          -->
+          <span class="badge" class:badge-pass={provenance === 'employer_ats'} title={PROVENANCE_NOTE[provenance]}>
+            {PROVENANCE_LABEL[provenance]}
+          </span>
         </div>
         <p class="mono url">{detection.url}</p>
+        <p class="meta">{PROVENANCE_NOTE[provenance]}</p>
 
         {#if detection.notes.length > 0}
           <ul class="notes">
@@ -803,6 +828,7 @@
           <tr>
             <th>Name</th>
             <th>Type</th>
+            <th>Source of truth</th>
             <th>Regions</th>
             <th>Notes</th>
             <th>Enabled</th>
@@ -811,6 +837,7 @@
         </thead>
         <tbody>
           {#each sources as source (source.id)}
+            {@const provenance = asProvenance(source.provenance)}
             <tr>
               <td>
                 <span class="job-title">{source.name}</span>
@@ -819,6 +846,18 @@
                 {/if}
               </td>
               <td><span class="badge">{source.type}</span></td>
+              <!--
+                "Source of truth" rather than "type", because the point is who can tell you the
+                posting is gone. Only the employer's own ATS can, and a 200 from an aggregator is
+                not evidence of anything.
+              -->
+              <td>
+                <span
+                  class="badge"
+                  class:badge-pass={provenance === 'employer_ats'}
+                  title={PROVENANCE_NOTE[provenance]}
+                >{PROVENANCE_LABEL[provenance]}</span>
+              </td>
               <td class="mono">{source.regions.join(', ')}</td>
               <td class="note-cell">{source.notes}</td>
               <td>

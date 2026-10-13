@@ -123,6 +123,10 @@ public class SchemaMigrationTests : IDisposable
             INSERT INTO jobs (id, title, company, location, url, description, source_name, created_at)
             VALUES ('job_1', 'Data Engineer', 'Acme', 'Nairobi', 'https://example.org/1',
                     'Must have Terraform and Kubernetes experience.', 'manual', '2026-01-01T00:00:00Z');
+            INSERT INTO job_sources (id, name, type, url, url_template, regions, enabled, rate_limit_ms,
+                    field_map, selectors, requires_key, notes, created_at, updated_at)
+            VALUES ('src_1', 'Legacy board', 'rss', 'https://example.org/feed', NULL, '[]', 1, 2000,
+                    '{}', '{}', '', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
             """;
         seed.ExecuteNonQuery();
     }
@@ -167,6 +171,39 @@ public class SchemaMigrationTests : IDisposable
         // NULL is the honest value and must not be papered over with a creation date. "We applied
         // to this" and "this was open when we checked" are different facts.
         Assert.Null(host.Jobs.GetJob("job_1")?.LastVerifiedAt);
+    }
+
+    [Fact]
+    public void A_source_saved_before_this_release_reads_as_unknown_provenance()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        // Same rule as the verified timestamp. A source we cannot place is not the employer's own
+        // system, and defaulting it to anything better is how a dead posting looks confirmed.
+        var source = host.Registry.List().Single(s => s.Name == "Legacy board");
+
+        Assert.Equal(Services.Sources.SourceProvenance.Unknown, source.Provenance);
+    }
+
+    [Fact]
+    public void A_source_can_be_saved_with_its_provenance_after_the_upgrade()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        // Through the save path, on a database that did not have the column when it was created.
+        // If the migration were missing this throws rather than silently doing nothing.
+        var saved = host.Registry.Save(new Models.UpsertSourceRequest
+        {
+            Name = "Stripe board",
+            Type = "json",
+            Url = "https://boards-api.greenhouse.io/v1/boards/stripe/jobs",
+            Provenance = "employer_ats"
+        });
+
+        Assert.Equal(Services.Sources.SourceProvenance.EmployerAts, saved.Provenance);
+        Assert.Equal(Services.Sources.SourceProvenance.EmployerAts, host.Registry.Get(saved.Id)?.Provenance);
     }
 
     [Fact]

@@ -67,14 +67,18 @@ public static class KitEndpoints
         /// <summary>
         /// The whole tracker as one small JSON file: company slug -> stage, note and dates. It carries
         /// no resume text, no job descriptions and no keys, so it is safe to keep in a notes file.
+        ///
+        /// The analysis tier is on by default and carries what a person established by reading a
+        /// posting: the URL, the posting date, the score, the closing date, and whether the role was
+        /// confirmed open and on what date. Pass ?analysis=false for the old narrow shape.
         /// </summary>
-        group.MapGet("/export", (TrackerTransfer transfer) =>
+        group.MapGet("/export", (bool? analysis, TrackerTransfer transfer) =>
             Api.Guard(() => Task.FromResult(Results.Bytes(
-                System.Text.Encoding.UTF8.GetBytes(transfer.ExportJson()),
+                System.Text.Encoding.UTF8.GetBytes(transfer.ExportJson(analysis ?? true)),
                 "application/json", "applications.json"))));
 
-        group.MapGet("/export-text", (TrackerTransfer transfer) =>
-            Api.Guard(() => Task.FromResult(Api.Ok(new { json = transfer.ExportJson() }))));
+        group.MapGet("/export-text", (bool? analysis, TrackerTransfer transfer) =>
+            Api.Guard(() => Task.FromResult(Api.Ok(new { json = transfer.ExportJson(analysis ?? true) }))));
 
         /// <summary>
         /// Reads that file back in. Entries already tracked are left alone unless overwrite is set, so

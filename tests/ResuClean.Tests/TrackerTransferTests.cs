@@ -10,6 +10,164 @@ namespace ResuClean.Tests;
 /// </summary>
 public class TrackerTransferTests
 {
+    // ---- The analysis tier ------------------------------------------------------
+
+    /// <summary>
+    /// A hand-verified record. Hand-verified means read by a person, which is why it is worth more
+    /// than anything this tool can recompute: on 12 Oct 2026, 19 tracked positions carried analysis
+    /// like this, and more than half turned out not to be what they appeared to be. Re-deriving any
+    /// of it after a reinstall would be guessing at a conclusion somebody reached by looking.
+    /// </summary>
+    private const string AnalysedFile = """
+        {
+          "jumia": {
+            "stage": "applied",
+            "note": "Greenhouse 404, board slug never held engineering roles",
+            "applied": "2026-10-11",
+            "updated": "2026-10-12",
+            "url": "https://boards.greenhouse.io/jumia/jobs/1",
+            "posted": "2026-06-01",
+            "score": 72,
+            "verified": "closed",
+            "deadline": "2026-08-30"
+          },
+          "google_search": {
+            "stage": "applied",
+            "note": "",
+            "gaps": "Kubernetes, Go",
+            "applied": "2026-10-02",
+            "updated": "2026-10-12",
+            "url": "https://example.org/google",
+            "score": 88,
+            "verified": "open",
+            "checked": "2026-10-12"
+          },
+          "bluegeko": {
+            "stage": "todo",
+            "note": "behind Cloudflare 403, never confirmed",
+            "applied": "",
+            "updated": "",
+            "verified": "unverifiable"
+          }
+        }
+        """;
+
+    [Fact]
+    public void A_verification_verdict_survives_the_round_trip()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+
+        var exported = TransferFor(host).ExportJson();
+
+        Assert.Contains("\"verified\": \"closed\"", exported);
+        Assert.Contains("\"verified\": \"open\"", exported);
+        Assert.Contains("\"verified\": \"unverifiable\"", exported);
+    }
+
+    [Fact]
+    public void The_date_a_role_was_confirmed_open_survives()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+
+        // "Checked 12 Oct" is the whole value of this feature. Losing it turns a hand-verified
+        // record back into a guess, which is the failure the analysis tier exists to prevent.
+        Assert.Contains("\"checked\": \"2026-10-12\"", TransferFor(host).ExportJson());
+    }
+
+    [Fact]
+    public void An_unverifiable_verdict_carries_no_checked_date()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+        var exported = TransferFor(host).ExportJson();
+
+        // Nobody confirmed anything, so there is no date to claim. Emitting one would be inventing a
+        // check that never happened.
+        var bluegeko = System.Text.Json.JsonDocument.Parse(exported).RootElement.GetProperty("bluegeko");
+        Assert.False(bluegeko.TryGetProperty("checked", out _));
+        Assert.Equal("unverifiable", bluegeko.GetProperty("verified").GetString());
+    }
+
+    [Fact]
+    public void Gaps_and_url_and_score_survive()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+        var exported = TransferFor(host).ExportJson();
+
+        Assert.Contains("\"url\": \"https://example.org/google\"", exported);
+        Assert.Contains("\"score\": 88", exported);
+        // A restored posting keeps the URL that was actually checked, so re-verifying is one click.
+        Assert.NotNull(host.Jobs.GetJob(host.Jobs.ListJobs(1, 50, "Google", null, null, null).Items[0].Id));
+    }
+
+    [Fact]
+    public void An_unknown_verdict_is_reported_rather_than_stored()
+    {
+        using var host = new TestHost();
+        var summary = TransferFor(host).ImportJson(
+            """{ "acme": { "stage": "todo", "verified": "probably-fine" } }""", overwrite: false);
+
+        Assert.Contains(summary.Skipped, s => s.Contains("acme") && s.Contains("probably-fine"));
+        var job = host.Jobs.ListJobs(1, 50, "Acme", null, null, null).Items.Single();
+        Assert.NotEqual("probably-fine", job.Status);
+    }
+
+    [Fact]
+    public void An_older_file_without_the_analysis_tier_leaves_a_verdict_alone()
+    {
+        using var host = new TestHost();
+        var id = host.Jobs.SaveManualJob(new Models.SaveJobRequest
+        {
+            Title = "Data Engineer", Company = "Acme", Url = "https://example.org/1", Text = "Pipelines."
+        }).Id;
+        host.Jobs.UpdateVerification(id, "2026-10-12T09:00:00Z", null, "open");
+
+        // The old narrow shape, imported over a tracker that already holds a verdict. It must not
+        // erase it: the file simply does not know about verification.
+        TransferFor(host).ImportJson(
+            """{ "acme": { "stage": "applied", "note": "", "applied": "2026-10-11", "updated": "2026-10-11" } }""",
+            overwrite: true);
+
+        Assert.Equal("2026-10-12T09:00:00Z", host.Jobs.GetJob(id)?.LastVerifiedAt);
+    }
+
+    [Fact]
+    public void The_analysis_tier_can_be_left_out()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+
+        // The original narrow shape, for anyone who wants the file to stay about stages and notes.
+        var narrow = TransferFor(host).ExportJson(includeAnalysis: false);
+
+        Assert.DoesNotContain("\"verified\"", narrow);
+        Assert.DoesNotContain("\"url\"", narrow);
+        Assert.Contains("\"stage\"", narrow);
+    }
+
+    [Fact]
+    public void An_export_of_an_import_reproduces_the_same_analysis()
+    {
+        using var host = new TestHost();
+        TransferFor(host).ImportJson(AnalysedFile, overwrite: false);
+        var first = TransferFor(host).ExportJson();
+
+        // Import the export into a clean database. The analysis must survive that too, which is the
+        // real lossless claim: not "reads back the same" but "reads back into a fresh install the same".
+        using var second = new TestHost();
+        TransferFor(second).ImportJson(first, overwrite: false);
+        var secondExport = TransferFor(second).ExportJson();
+
+        Assert.Equal(Normalise(first), Normalise(secondExport));
+    }
+
+    /// <summary>Ids and timestamps differ between databases; the analysis must not.</summary>
+    private static string Normalise(string json) => json
+        .Replace("\r\n", "\n");
+
     private static TrackerTransfer TransferFor(TestHost host) => new(host.Db, host.Jobs);
 
     /// <summary>The shape this feature was built for, with the stage values a person actually uses.</summary>

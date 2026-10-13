@@ -29,7 +29,9 @@ public sealed record SeedPackEntry(
     Dictionary<string, string> FieldMap,
     Dictionary<string, string> Selectors,
     string RequiresKey,
-    string Notes);
+    string Notes,
+    /// <summary>employer_ats | aggregator | board | unknown. Who is authoritative about this posting.</summary>
+    string Provenance = SourceProvenance.Unknown);
 
 public sealed record SeedPack(string Id, string Name, string Description, SeedPackEntry[] Entries);
 
@@ -50,6 +52,14 @@ public static class SeedPacks
     private static Dictionary<string, string> Sel(params (string Key, string Value)[] pairs) =>
         pairs.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
 
+    /// <summary>
+    /// A seed entry. Provenance is derived from the host rather than written by hand at each call
+    /// site, so a seeded source cannot drift from the rule that classifies every other source — and
+    /// the Greenhouse pack, which is the whole point of the high-leverage one, is marked
+    /// employer_ats automatically because that is where its URLs point.
+    ///
+    /// A search-URL source has no host to classify, so it stays unknown unless the pack says otherwise.
+    /// </summary>
     private static SeedPackEntry Entry(
         string key,
         string name,
@@ -62,13 +72,15 @@ public static class SeedPacks
         Dictionary<string, string>? fieldMap = null,
         Dictionary<string, string>? selectors = null,
         string requiresKey = "",
-        string notes = "")
+        string notes = "",
+        string? provenance = null)
     {
         return new SeedPackEntry(
             key, name, type, url, urlTemplate,
             regions ?? new[] { "global" },
             enabledByDefault, rateLimitMs,
-            fieldMap ?? Map(), selectors ?? Sel(), requiresKey, notes);
+            fieldMap ?? Map(), selectors ?? Sel(), requiresKey, notes,
+            provenance ?? SourceProvenance.For(url ?? urlTemplate));
     }
 
     public static readonly SeedPack Kenya = new(

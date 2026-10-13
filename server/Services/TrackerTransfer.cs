@@ -64,11 +64,14 @@ public sealed class TrackerTransfer
         string.Join(" ", slug.Split('_', StringSplitOptions.RemoveEmptyEntries)
             .Select(w => w.Length == 0 ? w : char.ToUpperInvariant(w[0]) + w[1..]));
 
-    public string ExportJson()
+    public string ExportJson(bool includeAnalysis = true)
     {
         var rows = Db.Query(_db.Open(),
             "SELECT a.id, a.status, a.notes, a.created_at, a.updated_at, COALESCE(j.company,'') AS company, "
-            + "COALESCE(j.title,'') AS title FROM applications a "
+            + "COALESCE(j.title,'') AS title, COALESCE(j.url,'') AS url, COALESCE(j.posted_at,'') AS posted, "
+            + "COALESCE(j.match_pct,0) AS match_pct, COALESCE(j.status,'') AS verify_status, "
+            + "COALESCE(j.last_verified_at,'') AS verified_at, COALESCE(j.deadline_at,'') AS deadline "
+            + "FROM applications a "
             + "LEFT JOIN jobs j ON j.id = a.job_id ORDER BY a.updated_at DESC",
             r => new
             {
@@ -77,6 +80,12 @@ public sealed class TrackerTransfer
                 Note = Db.Str(r, "notes"),
                 Company = Db.Str(r, "company"),
                 Title = Db.Str(r, "title"),
+                Url = Db.Str(r, "url"),
+                Posted = Db.Str(r, "posted"),
+                MatchPct = Db.Int(r, "match_pct"),
+                VerifyStatus = Db.Str(r, "verify_status"),
+                VerifiedAt = Db.Str(r, "verified_at"),
+                DeadlineAt = Db.Str(r, "deadline"),
                 Created = Db.Str(r, "created_at"),
                 Updated = Db.Str(r, "updated_at")
             }, Array.Empty<Microsoft.Data.Sqlite.SqliteParameter>());
@@ -84,24 +93,59 @@ public sealed class TrackerTransfer
         // One entry per company, first one wins. A tracker with two applications to the same company
         // is a mistake the user can fix; silently dropping one in the export would be a worse one.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var payload = new SortedDictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+
+        // A typed entry rather than a string map, so the score serialises as a number. A hand-edited
+        // file is meant to be readable and writable by a person, and "score": "88" is the kind of
+        // quoting that makes a file annoying to edit correctly.
+        var payload = new SortedDictionary<string, TrackerExportEntry>(StringComparer.OrdinalIgnoreCase);
         foreach (var row in rows)
         {
             var key = Slug(row.Company) is { Length: > 0 } c ? c : Slug(row.Title);
             if (key.Length == 0 || !seen.Add(key)) continue;
             var todo = row.Stage == "todo";
-            payload[key] = new Dictionary<string, string>
+
+            var entry = new TrackerExportEntry
             {
-                ["stage"] = row.Stage,
-                ["note"] = row.Note,
-                ["applied"] = todo ? "" : ShortDate(row.Created),
-                ["updated"] = todo ? "" : ShortDate(row.Updated)
+                Stage = row.Stage,
+                Note = row.Note,
+                Applied = todo ? "" : ShortDate(row.Created),
+                Updated = todo ? "" : ShortDate(row.Updated)
             };
+
+            // The analysis tier, and only when asked for. Everything here is something a person
+            // established by reading a posting — the gaps they named, the fit they judged, the date
+            // they confirmed the role open. Re-deriving any of it after a reinstall would be worse
+            // than useless, because the tool would be guessing at a conclusion the user reached.
+            if (includeAnalysis)
+            {
+                var posted = ShortDate(row.Posted);
+                var checkedOn = ShortDate(row.VerifiedAt);
+                var deadline = ShortDate(row.DeadlineAt);
+
+                if (row.Url.Length > 0) entry.Url = row.Url;
+                if (posted.Length > 0) entry.Posted = posted;
+                if (row.MatchPct > 0) entry.Score = row.MatchPct;
+                if (row.VerifyStatus.Length > 0) entry.Verified = row.VerifyStatus;
+                // Only an open verdict carries a date: a check that confirmed nothing has no timestamp.
+                if (row.VerifyStatus == "open" && checkedOn.Length > 0) entry.Checked = checkedOn;
+                if (deadline.Length > 0) entry.Deadline = deadline;
+            }
+
+            payload[key] = entry;
         }
 
-        return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
-
-
+        return JsonSerializer.Serialize(payload, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            // Lowercase, to match the file format this feature already shipped. The export is a
+            // file people read and hand-edit, and its keys have always been lowercase; changing that
+            // would break every file anyone has already written or scripted against.
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            // Nulls are omitted, not written as null. An absent analysis key means "never
+            // determined", and writing "verified": null would make that indistinguishable from a
+            // verdict that was checked and found to be nothing.
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        }) + Environment.NewLine;
     }
 
     /// <summary>ISO date only. The timestamps in the database carry a time nobody tracks by.</summary>
@@ -139,8 +183,16 @@ public sealed class TrackerTransfer
                 var updated = Str(value, "updated");
                 var status = stage;
                 var company = Humanise(key);
-                var jobId = ResolveJob(conn, key, company);
+                var jobId = ResolveJob(conn, key, company, Str(value, "title"), Str(value, "url"));
                 if (jobId is null) { summary.Skipped.Add($"{key}: no job could be created."); continue; }
+
+                // The analysis tier. A posting someone hand-verified carries its verdict with it, so
+                // a reinstall cannot quietly downgrade "confirmed open on the 12th" back to a guess.
+                // Names that were read off a posting are appended to the note rather than stored
+                // separately: they are prose the user wrote, and the note is where prose belongs.
+                if (note.Length == 0) note = Str(value, "gaps");
+                else if (Str(value, "gaps").Length > 0) note = $"{note}\n\nGaps: {Str(value, "gaps")}";
+                ApplyAnalysis(conn, jobId, value, summary, key);
 
                 var existingId = Db.QueryOne(conn,
                     "SELECT id FROM applications WHERE job_id = @j ORDER BY updated_at DESC LIMIT 1",
@@ -188,7 +240,8 @@ public sealed class TrackerTransfer
     /// Matching goes through the same <see cref="Slug"/> the export uses. Reproducing it in SQL would
     /// be two implementations of one rule, and the two would drift on the first punctuation mark.
     /// </summary>
-    private static string? ResolveJob(Microsoft.Data.Sqlite.SqliteConnection conn, string key, string company)
+    private static string? ResolveJob(
+        Microsoft.Data.Sqlite.SqliteConnection conn, string key, string company, string title = "", string url = "")
     {
         var candidates = Db.Query(conn, "SELECT id, company, title FROM jobs",
             r => (Id: Db.Str(r, "id"), Company: Db.Str(r, "company"), Title: Db.Str(r, "title")),
@@ -202,19 +255,102 @@ public sealed class TrackerTransfer
 
         var now = DateTime.UtcNow.ToString("O");
         var id = ProfileService.NewId("job");
+
+        // The role title and posting URL come from the analysis tier when the file carries them, so
+        // a restored tracker shows what the role actually was instead of repeating the company name.
+        var role = title.Length > 0 ? title : company;
+        var link = url.Length > 0 ? url : "import-" + id;
+
         Db.Exec(conn,
             "INSERT OR IGNORE INTO jobs (id, title, company, location, url, posted_at, description, source_id, "
             + "source_name, match_pct, remote, is_manual, best_version_id, raw, created_at) "
-            + "VALUES (@i,@t,@c,'','import-' || @i,NULL,'','imported','import',0,0,1,'','',@n)",
-            Db.P("@i", id), Db.P("@t", company), Db.P("@c", company), Db.P("@n", now));
+            + "VALUES (@i,@t,@c,'',@u,NULL,'','imported','import',0,0,1,'','',@n)",
+            Db.P("@i", id), Db.P("@t", role), Db.P("@c", company), Db.P("@u", link), Db.P("@n", now));
 
         return Db.QueryOne(conn, "SELECT id FROM jobs WHERE id = @i", r => Db.Str(r, "id"), Db.P("@i", id));
+    }
+
+    /// <summary>
+    /// Restores the verification verdict, the closing date and the score from an exported file.
+    ///
+    /// A recorded verdict is written as-is and never re-derived. That is the whole point: the person
+    /// who read the posting already checked it, and a tool that recomputed the answer would be
+    /// guessing at a conclusion somebody reached by looking.
+    ///
+    /// An absent field leaves the existing value alone rather than clearing it, so importing an
+    /// older file — one written before the analysis tier existed — cannot erase a verdict this tool
+    /// already holds.
+    /// </summary>
+    private static void ApplyAnalysis(
+        Microsoft.Data.Sqlite.SqliteConnection conn, string jobId, JsonElement entry,
+        TrackerImportSummary summary, string key)
+    {
+        var score = Int(entry, "score");
+        if (score > 0)
+            Db.Exec(conn, "UPDATE jobs SET match_pct = @s WHERE id = @id", Db.P("@s", score), Db.P("@id", jobId));
+
+        var deadline = Str(entry, "deadline");
+        if (deadline.Length > 0)
+            Db.Exec(conn, "UPDATE jobs SET deadline_at = @d WHERE id = @id", Db.P("@d", deadline), Db.P("@id", jobId));
+
+        var verdict = Str(entry, "verified").ToLowerInvariant();
+        if (verdict.Length == 0) return;
+
+        if (verdict is not ("open" or "closed" or "unverifiable"))
+        {
+            summary.Skipped.Add($"{key}: unknown verification verdict \"{verdict}\" ignored.");
+            return;
+        }
+
+        // Only an open verdict carries a date: "we checked and could not tell" has no timestamp,
+        // because it did not confirm anything.
+        var checkedAt = verdict == "open" ? Str(entry, "checked") : "";
+        if (checkedAt.Length > 0 && !DateTime.TryParse(checkedAt, out _)) checkedAt = "";
+
+        Db.Exec(conn,
+            "UPDATE jobs SET status = @st, last_verified_at = COALESCE(NULLIF(@lv, ''), last_verified_at) WHERE id = @id",
+            Db.P("@st", verdict), Db.P("@lv", checkedAt), Db.P("@id", jobId));
     }
 
     private static string Str(JsonElement element, string name) =>
         element.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
             ? (v.GetString() ?? "")
             : "";
+
+    private static int Int(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n)
+            ? n
+            : 0;
+}
+
+/// <summary>
+/// One line per company in the exported file.
+///
+/// Stage, note and dates are always written. The rest is the analysis tier: optional, and omitted
+/// entirely when it was never established. An absent key means "never determined", which is
+/// different from a present key holding an empty value, and the distinction is the point — an
+/// unverified posting must not look like one somebody checked and found nothing.
+/// </summary>
+public sealed class TrackerExportEntry
+{
+    public string Stage { get; set; } = "todo";
+    public string Note { get; set; } = "";
+    public string Applied { get; set; } = "";
+    public string Updated { get; set; } = "";
+
+    // ---- Analysis tier. Null means never established. ----
+
+    /// <summary>The posting itself, so re-verifying is one click rather than a search.</summary>
+    public string? Url { get; set; }
+    public string? Posted { get; set; }
+    public int? Score { get; set; }
+    /// <summary>open | closed | unverifiable, as established by a person reading the posting.</summary>
+    public string? Verified { get; set; }
+    /// <summary>When it was confirmed open. Null when nothing was confirmed.</summary>
+    public string? Checked { get; set; }
+    public string? Deadline { get; set; }
+    /// <summary>Named gaps, folded into the note on import because they are prose, not a field.</summary>
+    public string? Gaps { get; set; }
 }
 
 /// <summary>Counts and reasons for one import run.</summary>

@@ -378,6 +378,8 @@ export interface Source {
   requiresKey: string;
   notes: string;
   createdAt: string;
+  /** Who is authoritative about a posting from this source still existing. Absent means unknown. */
+  provenance?: Provenance;
 }
 
 export interface PackEntry {
@@ -392,6 +394,7 @@ export interface PackEntry {
   selectors: Record<string, string>;
   requiresKey: string;
   notes: string;
+  provenance?: Provenance;
 }
 
 export interface SourcePack {
@@ -422,6 +425,8 @@ export interface DetectResult {
   notes: string[];
   ok: boolean;
   error: string | null;
+  /** From the host. Absent when the server predates the field, which reads as unknown. */
+  provenance?: Provenance;
 }
 
 export interface TestResult {
@@ -471,6 +476,31 @@ export interface JobVerification {
   lastVerifiedAt?: string;
   deadlineAt?: string;
   effectiveStatus: string;
+}
+
+/**
+ * Who is authoritative about a posting still existing.
+ *
+ * `employer_ats` is the employer's own board, and only that can return a meaningful 404. An
+ * aggregator republishes listings it did not author and may serve one for weeks after the
+ * employer's board dropped it, so a 200 there is not evidence of anything. `unknown` is a real
+ * value rather than a placeholder: we could not place the host, so anything found there is
+ * unverified.
+ */
+export type Provenance = 'employer_ats' | 'aggregator' | 'board' | 'unknown';
+
+/** The one sentence each provenance is shown with, so the difference is never left implicit. */
+export const PROVENANCE_NOTE: Record<Provenance, string> = {
+  employer_ats: "The employer's own board. Only this can tell you the posting is gone.",
+  aggregator:
+    'A third-party index. A listing here can outlive the posting on the employer’s own board, so it is not evidence the role is open.',
+  board: 'A general listings site. The employer’s own posting is elsewhere and may already be closed.',
+  unknown: 'Unknown where this came from, so treat it as unverified.'
+};
+
+/** Narrowing an untrusted server value rather than trusting it into a union type. */
+export function asProvenance(value: unknown): Provenance {
+  return value === 'employer_ats' || value === 'aggregator' || value === 'board' ? value : 'unknown';
 }
 
 export interface JobRequirement {

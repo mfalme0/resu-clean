@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { api, ApiError, type Job } from '../lib/api';
+import { api, ApiError, asProvenance, PROVENANCE_NOTE, type Job } from '../lib/api';
 
 /**
  * The server omits null properties rather than serialising them (see Api.cs: DefaultIgnoreCondition
@@ -132,5 +132,39 @@ describe('verification endpoints', () => {
     expect(result.status).toBe('open');
     expect(result.effectiveStatus).toBe('open');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('provenance', () => {
+  // An unrecognised value from the server must not be trusted into the union. Treating an unknown
+  // host as authoritative is what let four dead Jumia roles sit in a tracker as live, so the client
+  // narrows rather than casts, and an absent field reads as unknown.
+  it.each([
+    ['employer_ats', 'employer_ats'],
+    ['aggregator', 'aggregator'],
+    ['board', 'board'],
+    ['unknown', 'unknown'],
+    ['definitely-trustworthy', 'unknown'],
+    [undefined, 'unknown'],
+    [null, 'unknown'],
+    [42, 'unknown']
+  ])('narrows %p to %p', (input, expected) => {
+    expect(asProvenance(input)).toBe(expected);
+  });
+
+  it('has an explanation for every value it can produce', () => {
+    for (const value of ['employer_ats', 'aggregator', 'board', 'unknown'] as const) {
+      expect(PROVENANCE_NOTE[value]).toBeTruthy();
+    }
+  });
+
+  it('says why an aggregator is not evidence', () => {
+    // This sentence is the entire feature. A 200 from an aggregator proves nothing, and the screen
+    // has to say so rather than leaving the user to infer it from a badge.
+    expect(PROVENANCE_NOTE.aggregator).toMatch(/not evidence/i);
+  });
+
+  it('says an employer ATS is the only thing that can confirm a posting is gone', () => {
+    expect(PROVENANCE_NOTE.employer_ats).toMatch(/gone|closed/i);
   });
 });

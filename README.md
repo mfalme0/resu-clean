@@ -36,6 +36,7 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Adding a source](#adding-a-source)
 - [Adding a model](#adding-a-model)
 - [Search](#search)
+- [Round-tripping the tracker](#round-tripping-the-tracker)
 - [Is this posting still real?](#is-this-posting-still-real)
 - [Reading a posting](#reading-a-posting)
 - [Closing a gap](#closing-a-gap)
@@ -400,6 +401,42 @@ that happens the UI says so rather than implying the answer came off the web.
   date absent from your input — which is exactly what a search result is made of. Routing search
   through it would reject every real answer.
 
+## Round-tripping the tracker
+
+The tracker exports as one small JSON file. It is meant to be readable, diffable and safe to keep in
+a notes file, so it carries no resume text, no job descriptions and no keys.
+
+Stage, note and dates are always written. Alongside them is an **analysis tier**, on by default:
+
+```json
+{
+  "jumia": {
+    "stage": "applied",
+    "note": "Greenhouse 404, board slug never held engineering roles",
+    "applied": "2026-10-11",
+    "updated": "2026-10-12",
+    "url": "https://boards.greenhouse.io/jumia/jobs/1",
+    "score": 72,
+    "verified": "closed",
+    "deadline": "2026-08-30"
+  }
+}
+```
+
+Every field in that tier is something **a person established by reading a posting** — the gaps they
+named, the fit they judged, the date they confirmed the role open. Re-deriving any of it after a
+reinstall would be worse than useless, because the tool would be guessing at a conclusion you
+reached by looking. So on import:
+
+- a recorded verdict is restored **as-is, never recomputed**
+- an **absent** field leaves the existing value alone, so importing an older file cannot erase a
+  verdict this tool already holds
+- an unrecognised verdict is **reported as skipped**, never stored
+- only an `open` verdict carries a `checked` date, because a check that confirmed nothing has no
+  timestamp
+
+Pass `?analysis=false` to `/api/tracker/export` for the original narrow shape.
+
 ## Is this posting still real?
 
 Checked across 27 tracked positions on 12 Oct 2026, more than half were not what they appeared to
@@ -431,8 +468,11 @@ says so. A deadline still in the future is reported as information, never as evi
 winnable. Where no deadline is stated, that is reported too: an absent deadline is information.
 
 **An aggregator is a convenience, not evidence.** Only the employer's own system can return a 404,
-so a posting sourced from a board API carries a different failure mode from one on a company ATS, and
-the badge says which you have.
+so a posting sourced from a board API carries a different failure mode from one on a company ATS.
+Every source is classified from its host — `employer_ats`, `aggregator`, `board`, or `unknown` — and
+shown as **Source of truth** on the Sources screen and at detection time, before you decide whether
+to add it. `unknown` is a real answer, not a placeholder: it means we could not place the host, so
+anything found there is unverified.
 
 ## Reading a posting
 
@@ -647,18 +687,19 @@ npm run smoke         # live API smoke test against a throwaway database
 npm run mem:measure   # regenerate the memory table above
 ```
 
-- **315 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
+- **404 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
   profile pending/dedupe/approval, router fallback with mock models, source parsing and field
   mapping from saved fixtures (no network), cross-source dedupe, `.eml`/`.zip` generation, key
   encryption at rest, robots.txt longest-match precedence, the seed pack invariants, requirement
   classification, posting quality, gap ramps, interview grounding, tracker export/import, the
   skill dictionary, and the rewrite gate and ledger. Includes a migration test that boots the real
   services against a database shaped like an older release, which is the upgrade path no other test
-  covers. Plus scorer invariants held across generated input, and deadline reading that is mostly
-  tested for what it must *not* read.
-- **21 frontend tests** — router, link interception, error envelope, op polling, and the null-omission
-  contract every renderer depends on.
-- **65 API smoke checks** — real HTTP against a running backend, asserting payloads are actually our
+  covers. Plus scorer invariants held across generated input, deadline reading that is mostly
+  tested for what it must *not* read, and source provenance with a drift guard that fails if a seed
+  entry is added without one.
+- **32 frontend tests** — router, link interception, error envelope, op polling, the null-omission
+  contract every renderer depends on, and narrowing an untrusted provenance value.
+- **67 API smoke checks** — real HTTP against a running backend, asserting payloads are actually our
   JSON shapes. This exists because it caught a bug where 13 endpoints returned HTTP 200 with a
   serialised `Task` instead of their data.
 

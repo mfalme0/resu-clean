@@ -19,14 +19,15 @@ public sealed class SourceRegistry
     {
         using var conn = _db.Open();
         var rows = Db.Query(conn,
-            "SELECT id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at " +
+            "SELECT id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at, provenance " +
             "FROM job_sources" + (enabledOnly ? " WHERE enabled = 1" : "") + " ORDER BY name",
             r => new SourceDto(
                 Db.Str(r, "id"), Db.Str(r, "name"), Db.Str(r, "type"),
                 Db.StrOrNull(r, "url"), Db.StrOrNull(r, "url_template"),
                 StringList(Db.Str(r, "regions")), Db.Bool(r, "enabled"),
                 Db.Int(r, "rate_limit_ms"), Dict(Db.Str(r, "field_map")), Dict(Db.Str(r, "selectors")),
-                Db.Str(r, "requires_key"), Db.Str(r, "notes"), Db.Str(r, "created_at")),
+                Db.Str(r, "requires_key"), Db.Str(r, "notes"), Db.Str(r, "created_at"),
+                Provenance(r)),
             Array.Empty<SqliteParameter>());
 
         if (string.IsNullOrWhiteSpace(region)) return rows;
@@ -37,14 +38,28 @@ public sealed class SourceRegistry
     {
         using var conn = _db.Open();
         return Db.QueryOne(conn,
-            "SELECT id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at FROM job_sources WHERE id = @id",
+            "SELECT id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at, provenance FROM job_sources WHERE id = @id",
             r => new SourceDto(
                 Db.Str(r, "id"), Db.Str(r, "name"), Db.Str(r, "type"),
                 Db.StrOrNull(r, "url"), Db.StrOrNull(r, "url_template"),
                 StringList(Db.Str(r, "regions")), Db.Bool(r, "enabled"),
                 Db.Int(r, "rate_limit_ms"), Dict(Db.Str(r, "field_map")), Dict(Db.Str(r, "selectors")),
-                Db.Str(r, "requires_key"), Db.Str(r, "notes"), Db.Str(r, "created_at")),
+                Db.Str(r, "requires_key"), Db.Str(r, "notes"), Db.Str(r, "created_at"),
+                Provenance(r)),
             Db.P("@id", id));
+    }
+
+    /// <summary>
+    /// Reads the provenance column, normalising anything unrecognised to "unknown".
+    ///
+    /// An older database has no such column, and a hand-edited one may hold a value we do not define.
+    /// Both cases mean we cannot say who is authoritative about this posting, and "unknown" is the
+    /// honest answer rather than a default that reads as confidence.
+    /// </summary>
+    private static string Provenance(SqliteDataReader r)
+    {
+        var value = Db.Str(r, "provenance").Trim().ToLowerInvariant();
+        return value is ("employer_ats" or "aggregator" or "board") ? value : "unknown";
     }
 
     public SourceDto Save(UpsertSourceRequest request)
@@ -61,28 +76,36 @@ public sealed class SourceRegistry
         var selectors = JsonSerializer.Serialize(request.Selectors ?? new Dictionary<string, string>());
 
         using var conn = _db.Open();
+        var provenance = NormaliseProvenance(request.Provenance);
         var exists = Db.Scalar(conn, "SELECT 1 FROM job_sources WHERE id = @id", Db.P("@id", id)) != null;
         if (exists)
         {
             Db.Exec(conn,
-                "UPDATE job_sources SET name=@n, type=@t, url=@u, url_template=@ut, regions=@rg, enabled=@e, rate_limit_ms=@rl, field_map=@fm, selectors=@se, requires_key=@rk, notes=@no, updated_at=@now WHERE id=@id",
+                "UPDATE job_sources SET name=@n, type=@t, url=@u, url_template=@ut, regions=@rg, enabled=@e, rate_limit_ms=@rl, field_map=@fm, selectors=@se, requires_key=@rk, notes=@no, provenance=@pv, updated_at=@now WHERE id=@id",
                 Db.P("@n", name), Db.P("@t", type), Db.P("@u", request.Url), Db.P("@ut", request.UrlTemplate),
                 Db.P("@rg", regions), Db.P("@e", request.Enabled == false ? 0 : 1), Db.P("@rl", request.RateLimitMs ?? 2000),
                 Db.P("@fm", fieldMap), Db.P("@se", selectors), Db.P("@rk", request.RequiresKey ?? ""),
-                Db.P("@no", request.Notes ?? ""), Db.P("@now", now), Db.P("@id", id));
+                Db.P("@no", request.Notes ?? ""), Db.P("@pv", provenance), Db.P("@now", now), Db.P("@id", id));
         }
         else
         {
             Db.Exec(conn,
-                "INSERT INTO job_sources (id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at, updated_at) " +
-                "VALUES (@id, @n, @t, @u, @ut, @rg, @e, @rl, @fm, @se, @rk, @no, @now, @now)",
+                "INSERT INTO job_sources (id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, provenance, created_at, updated_at) " +
+                "VALUES (@id, @n, @t, @u, @ut, @rg, @e, @rl, @fm, @se, @rk, @no, @pv, @now, @now)",
                 Db.P("@id", id), Db.P("@n", name), Db.P("@t", type), Db.P("@u", request.Url), Db.P("@ut", request.UrlTemplate),
                 Db.P("@rg", regions), Db.P("@e", request.Enabled == false ? 0 : 1), Db.P("@rl", request.RateLimitMs ?? 2000),
                 Db.P("@fm", fieldMap), Db.P("@se", selectors), Db.P("@rk", request.RequiresKey ?? ""),
-                Db.P("@no", request.Notes ?? ""), Db.P("@now", now));
+                Db.P("@no", request.Notes ?? ""), Db.P("@pv", provenance), Db.P("@now", now));
         }
 
         return Get(id) ?? throw new InvalidOperationException("The source could not be read back after saving.");
+    }
+
+    /// <summary>Accepts only the three known values; anything else is stored as unknown.</summary>
+    private static string NormaliseProvenance(string? value)
+    {
+        var v = (value ?? "").Trim().ToLowerInvariant();
+        return v is ("employer_ats" or "aggregator" or "board") ? v : "unknown";
     }
 
     public bool Delete(string id)
@@ -172,8 +195,8 @@ public sealed class SourceRegistry
 
                 var id = ProfileService.NewId("src");
                 Db.Exec(conn,
-                    "INSERT INTO job_sources (id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, created_at, updated_at) " +
-                    "VALUES (@id, @n, @t, @u, @ut, @rg, @e, @rl, @fm, @se, @rk, @no, @now, @now)",
+                    "INSERT INTO job_sources (id, name, type, url, url_template, regions, enabled, rate_limit_ms, field_map, selectors, requires_key, notes, provenance, created_at, updated_at) " +
+                    "VALUES (@id, @n, @t, @u, @ut, @rg, @e, @rl, @fm, @se, @rk, @no, @pv, @now, @now)",
                     Db.P("@id", id), Db.P("@n", entry.Name), Db.P("@t", entry.Type),
                     Db.P("@u", entry.Url), Db.P("@ut", entry.UrlTemplate),
                     Db.P("@rg", JsonSerializer.Serialize(entry.Regions)),
@@ -182,7 +205,8 @@ public sealed class SourceRegistry
                     Db.P("@rl", entry.RateLimitMs > 0 ? entry.RateLimitMs : 2000),
                     Db.P("@fm", JsonSerializer.Serialize(entry.FieldMap)),
                     Db.P("@se", JsonSerializer.Serialize(entry.Selectors)),
-                    Db.P("@rk", entry.RequiresKey), Db.P("@no", entry.Notes), Db.P("@now", now));
+                    Db.P("@rk", entry.RequiresKey), Db.P("@no", entry.Notes),
+                    Db.P("@pv", NormaliseProvenance(entry.Provenance)), Db.P("@now", now));
                 installedNames.Add(entry.Name);
             }
 

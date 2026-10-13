@@ -312,6 +312,24 @@ try {
         }
       }
 
+      // ---- source provenance ----
+      // An aggregator is a convenience, not evidence. Only an employer's own board can return a
+      // meaningful 404, so the screen has to be able to say which one a source is.
+      const sources = await call('GET /sources (provenance)', 'GET', '/sources', undefined,
+        { check: (o) => (Array.isArray(o) ? null : 'expected an array') });
+      const withProvenance = sources || [];
+      for (const source of withProvenance) {
+        if (!['employer_ats', 'aggregator', 'board', 'unknown'].includes(source.provenance)) {
+          console.error(`  FAIL sources: "${source.name}" has provenance "${source.provenance}"`);
+          failures++;
+        }
+      }
+
+      // A source saved with a nonsense verdict must not store it.
+      await call('POST /sources (bogus provenance)', 'POST', '/sources',
+        { name: 'Smoke provenance check', type: 'rss', url: 'https://example.org/feed', provenance: 'trust-me' },
+        { expectStatus: 201, check: (o) => (o.provenance === 'unknown' ? null : `expected unknown, got ${o.provenance}`) });
+
       // ---- verification ----
       // The timestamp and the status are separate facts, and only one of them may move on a check
       // that could not confirm anything. A posting that reads as "open" because nobody re-checked it

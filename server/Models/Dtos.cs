@@ -245,7 +245,13 @@ public sealed record SourceDto(
     IReadOnlyDictionary<string, string> Selectors,
     string RequiresKey,
     string Notes,
-    string CreatedAt)
+    string CreatedAt,
+    /// <summary>
+    /// employer_ats | aggregator | board | unknown. Where the posting text came from, and therefore
+    /// who is authoritative about whether the role is still open. An aggregator is a convenience; it
+    /// is not evidence, and only the employer's own system can return a 404.
+    /// </summary>
+    string Provenance = "unknown")
 {
     public SourceDto WithFieldMap(Dictionary<string, string> map) => this with { FieldMap = map };
     public SourceDto WithSelectors(Dictionary<string, string> map) => this with { Selectors = map };
@@ -265,6 +271,8 @@ public sealed record UpsertSourceRequest
     public Dictionary<string, string>? Selectors { get; init; }
     public string? RequiresKey { get; init; }
     public string? Notes { get; init; }
+    /// <summary>employer_ats | aggregator | board. Anything else is stored as unknown.</summary>
+    public string? Provenance { get; init; }
 }
 
 public sealed record DetectSourceRequest(string Url, string? Query, string? Location);
@@ -278,7 +286,9 @@ public sealed record DetectSourceResponse(
     IReadOnlyList<SourcePreviewItem> Preview,
     IReadOnlyList<string> Notes,
     bool Ok,
-    string? Error);
+    string? Error,
+    /// <summary>employer_ats | aggregator | board | unknown, from the host.</summary>
+    string Provenance = "unknown");
 
 public sealed record SourcePreviewItem(string Title, string Company, string Location, string Url, string PostedAt, string Description, int MatchPct);
 

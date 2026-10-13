@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS job_sources (
   selectors     TEXT NOT NULL DEFAULT '{}',-- json/html only
   requires_key  TEXT NOT NULL DEFAULT '',
   notes         TEXT NOT NULL DEFAULT '',
+  -- Where this source's postings come from, and therefore who is authoritative about whether a role
+  -- is still open: employer_ats (the company's own board, the only one that can 404), aggregator
+  -- (a third-party index, a convenience and not evidence), board (a general listings site), unknown.
+  provenance    TEXT NOT NULL DEFAULT 'unknown',
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
