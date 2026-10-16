@@ -1,0 +1,36 @@
+# Build context hygiene.
+#
+# The important line is /data and *.db. The data folder holds your SQLite database, your resumes,
+# your verified profile and your encrypted API keys. Without these the whole thing gets copied into
+# the build context, which means it lands in the daemon's cache — and in the image, if any layer is
+# careless. A .dockerignore is the cheapest privacy control in this repo.
+
+# Never ship user data into an image.
+data/
+data-*/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+.env
+
+# Build output: regenerated inside the image, and the host copy would fight it.
+artifacts/
+artifacts-*/
+node_modules/
+web/node_modules/
+server/wwwroot/
+**/bin/
+**/obj/
+
+# Repo furniture.
+.git/
+.gitignore
+.vscode/
+.idea/
+.claude/
+TestResults/
+coverage/
+
+# Docs are not needed at runtime. Kept out only to keep the context small.
+progress.md

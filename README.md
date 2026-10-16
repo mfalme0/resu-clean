@@ -29,6 +29,7 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Quick start](#quick-start)
 - [Requirements](#requirements)
 - [The three run modes](#the-three-run-modes)
+- [Run it in a container](#run-it-in-a-container)
 - [The downloadable app](#the-downloadable-app)
 - [Where your data and API keys live](#where-your-data-and-api-keys-live)
 - [Memory](#memory)
@@ -138,6 +139,33 @@ npm run release:zips            # → artifacts/resu-clean-<rid>.zip, ready to a
 key-shaped string in a text file.
 
 Useful for a USB stick, or running it on a machine you do not want to install anything on.
+
+## Run it in a container
+
+```bash
+docker compose up -d     # then open http://127.0.0.1:5177
+docker compose logs -f
+docker compose down      # your data is still there
+```
+
+Three stages, because the toolchain and the runtime share nothing: Node builds the SPA into the
+folder the backend expects, the .NET SDK compiles, and the ASP.NET runtime image runs the result.
+The runtime image carries no Node and no SDK.
+
+**The volume is not optional.** `resu-data` holds your database, resumes, verified profile,
+encrypted keys and every generated kit. `down` keeps it; `down -v` deletes it, and the tool does not
+make backups. If you would rather have your data somewhere you can see it, bind a host folder
+instead — the note at the bottom of `docker-compose.yml` has the `chown` the non-root user needs.
+
+**It is published on `127.0.0.1` only, and that is deliberate.** The app has no authentication by
+default: anyone who can reach the port can read your profile and your resume, and spend your model
+credits. To use it from another machine on the LAN, change the mapping to `5177:5177` **and** set
+`RESUCLEAN_API_KEY` — do one without the other. The container binds to `0.0.0.0` internally,
+because Docker reaches it by IP, so the loopback restriction has to happen on the host side.
+
+There is no `.env` in the container, which is the point: the same `RESUCLEAN_*` names the desktop
+build uses, set in `docker-compose.yml` instead. Uncomment `env_file: .env` if you would rather keep
+one file.
 
 ## The downloadable app
 
@@ -687,7 +715,7 @@ npm run smoke         # live API smoke test against a throwaway database
 npm run mem:measure   # regenerate the memory table above
 ```
 
-- **404 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
+- **429 backend tests** — cleaner, ATS scoring and the 0–100 weighting, the no-fabrication guard,
   profile pending/dedupe/approval, router fallback with mock models, source parsing and field
   mapping from saved fixtures (no network), cross-source dedupe, `.eml`/`.zip` generation, key
   encryption at rest, robots.txt longest-match precedence, the seed pack invariants, requirement

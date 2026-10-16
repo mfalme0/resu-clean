@@ -1,0 +1,66 @@
+# resu-clean, run from a container.
+#
+#   docker compose up -d      then open http://127.0.0.1:5177
+#   docker compose logs -f
+#   docker compose down       your data is still there, see the volume note
+#
+# THE VOLUME IS NOT OPTIONAL. resu-data holds your database, resumes, verified profile and encrypted
+# API keys. `docker compose down` keeps it; `docker compose down -v` deletes it, and the tool does
+# not make backups. If you would rather not think about volumes at all, bind a folder on the host
+# instead — see the commented service at the bottom.
+
+services:
+  resu-clean:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: resu-clean:local
+    container_name: resu-clean
+    restart: unless-stopped
+
+    ports:
+      # Published on 127.0.0.1 only. The app has no authentication by default and will read your
+      # profile, your resume and spend your model credits for anyone who reaches it, so it does not
+      # go on 0.0.0.0 unless you ask. To use it from another machine on the LAN, change this to
+      # "5177:5177" AND set RESUCLEAN_API_KEY below — do one without the other.
+      - "127.0.0.1:5177:5177"
+
+    volumes:
+      - resu-data:/data
+
+    environment:
+      # The container has no .env file, which is the point: the same RESUCLEAN_* names the desktop
+      # build uses, set here instead. Copy .env.example and wire it in with env_file: below if you
+      # would rather keep one file.
+      RESUCLEAN_DATA_DIR: /data
+      RESUCLEAN_PORT: "5177"
+
+      # Set this before publishing on anything other than 127.0.0.1. Every /api call then needs the
+      # header X-API-Key, and the UI prompts for it once and keeps it in the browser.
+      # RESUCLEAN_API_KEY: change-me
+
+      # Uncomment to accept API keys from a .env file on the host, the same file the desktop build
+      # reads. Keep it out of git; it already is.
+      # env_file: .env
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5177/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  resu-data:
+    # A named volume lives inside Docker's storage, so it survives a rebuild and is not something
+    # you can see or edit from the file manager. If you want your data somewhere you control, drop
+    # this volume block and bind-mount a host folder instead:
+    #
+    #   volumes:
+    #     - ./resu-data:/data
+    #
+    # That folder then holds exactly what the desktop build's data folder holds, and you can copy
+    # the whole thing to a USB stick. It must be writable by uid 1654, the user the image runs as:
+    #
+    #   mkdir -p resu-data && sudo chown -R 1654:1654 resu-data
+    name: resu-clean-data
