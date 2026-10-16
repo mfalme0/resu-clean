@@ -39,6 +39,7 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Search](#search)
 - [Round-tripping the tracker](#round-tripping-the-tracker)
 - [Is this posting still real?](#is-this-posting-still-real)
+- [The daily digest](#the-daily-digest)
 - [Reading a posting](#reading-a-posting)
 - [Closing a gap](#closing-a-gap)
 - [The scoring dictionary](#the-scoring-dictionary)
@@ -502,6 +503,39 @@ shown as **Source of truth** on the Sources screen and at detection time, before
 to add it. `unknown` is a real answer, not a placeholder: it means we could not place the host, so
 anything found there is unverified.
 
+## The daily digest
+
+Settings → **Webhooks** posts one message a day to a URL you choose — Slack, Discord, Teams, ntfy, or
+anything that accepts a POST:
+
+```
+@jobseekers @dataeng userx has 11 new prospects, 1 needs immediate action and 1 posting changed status
+```
+
+It is a digest rather than a stream on purpose. A board sweep can save hundreds of postings in one run,
+and a webhook per posting produces a wall of noise that gets muted within a day, which from where you
+are sitting is the same as having no webhook. A count is what survives a notification channel.
+
+Counts are **since the last digest was sent**, stored per webhook. That cursor only moves when a send
+*succeeds*, so an endpoint that is down leaves the day queued for tomorrow rather than dropping it.
+
+**"Needs immediate action"** is one of three things, each shown with its reason: a deadline inside the
+window you set (default 7 days), a posting that has already closed, or one whose status cannot be
+established. A posting that went closed is reported as a status change, not as a new prospect, because
+counting it as one overstates the news.
+
+Nothing fires on a timer by itself. Point something you already run at the endpoint:
+
+```
+5 7 * * * curl -fsS -X POST http://127.0.0.1:8080/api/webhooks/send-all
+```
+
+**What crosses the boundary.** Job titles, companies, URLs, verdicts and counts. Never resume text,
+profile facts, tracker notes, or generated kits — that is enforced where the payload is built, in
+`WebhookService`, and pinned by a test that fails if a verified profile fact ever appears in a digest.
+Press **Preview** to see the exact message and its contents before pointing anything at a real
+destination.
+
 ## Reading a posting
 
 A job list ordered by keyword overlap will happily put a seventeen-month-old listing at the top, a
@@ -654,6 +688,7 @@ Everything lives under `/api`, JSON in and out. One group per screen:
 | Kits | `/api/kits` | Generate a kit; download `.eml` / `.zip` / `.txt` / cover `.pdf`; `mailto:` |
 | Tracker | `/api/tracker` | Application statuses and notes, plus `/export` and `/import` |
 | Models | `/api/providers`, `/api/routes` | Providers, presets, model discovery, per-workflow routing |
+| Webhooks | `/api/webhooks` | Digest destinations; `/{id}/preview`, `/{id}/send`, `/send-all` |
 | System | `/api/health`, `/api/capabilities`, `/api/metrics/mem`, `/api/ops/{id}` | Health, capabilities, memory, operation status |
 
 **Null properties are omitted, not serialised as `null`.** `quote: null` arrives as an absent key. It
@@ -757,11 +792,13 @@ skipped by default so `npm test` stays offline-safe. Run it before publishing a 
 - **API keys are never returned by any endpoint**, are encrypted at rest, and never appear in logs.
   Prefer an environment variable over storing one.
 - **Resume content is never logged.** Errors log a type and message, never your data.
-- **Nothing is ever sent on your behalf.** There is no email integration, no SMTP, no Gmail, no
-  OAuth. A kit is a set of files on disk plus a `mailto:` link; pressing send is your action.
+- **Nothing is sent on your behalf unless you configure it.** There is no email integration, no SMTP,
+  no Gmail, no OAuth. A kit is a set of files on disk plus a `mailto:` link; pressing send is your
+  action. The one outbound channel this tool can post to is a webhook you add yourself in
+  [Settings](#the-daily-digest), and it carries counts and job titles — never your resume.
 - **Your resume does not leave your machine** except to the job boards you choose to search. A web
   search sends your *query* to whichever search backend answers it; it never sends your resume or
-  profile.
+  profile. A webhook you configure sends counts, titles, companies and URLs, and nothing else.
 - **Search results cannot become facts.** They are quoted with their URLs and never written to the
   verified profile.
 - **No fabricated facts, ever.** Model output is validated before you see it: any number, date or

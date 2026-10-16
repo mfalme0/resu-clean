@@ -68,7 +68,11 @@ public sealed class Db
         ("job_sources", "provenance", "TEXT NOT NULL DEFAULT 'unknown'"),
         // Separate from created_at, which is always "when this row was written". Without this an
         // imported position you never applied to reports today as the application date.
-        ("applications", "applied_at", "TEXT")
+        ("applications", "applied_at", "TEXT"),
+        // When the verification verdict last changed, so a daily digest can report what changed
+        // rather than only what was confirmed open. last_verified_at deliberately does not move on
+        // a failed check, so it cannot answer that question on its own.
+        ("jobs", "status_changed_at", "TEXT")
     };
 
     private static void ApplyMigrations(SqliteConnection conn)

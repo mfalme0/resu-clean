@@ -59,6 +59,7 @@ builder.Services.AddSingleton(provider => new PositionImport(
 builder.Services.AddSingleton<ResumeWorkflows>();
 builder.Services.AddSingleton<OpRunner>();
 builder.Services.AddSingleton<ResuClean.Services.Search.WebSearchService>();
+builder.Services.AddSingleton<WebhookService>();
 
 // Search vendors get their own named client so a slow or hostile endpoint cannot exhaust the
 // connection pool the job-source fetcher relies on.
@@ -67,6 +68,18 @@ builder.Services.AddHttpClient("search", client =>
     client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("resu-clean/1.0 (self-hosted resume toolkit)");
 });
+
+// The digest destination gets its own client, for the same reason as search: a webhook endpoint is
+// a host the user chose and knows nothing about, and one that never answers must not be able to
+// exhaust the pool the job-source fetcher depends on. Redirects are refused, because a webhook URL
+// can be edited by hand and a redirect would quietly send it somewhere else.
+builder.Services.AddHttpClient("webhooks", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("resu-clean/1.0 (self-hosted resume toolkit)");
+    client.MaxResponseContentBufferSize = 256 * 1024;
+})
+.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 // Response caching is deliberately NOT registered: resume bodies are large and personal.
 builder.Services.AddResponseCaching(options =>
@@ -166,6 +179,7 @@ JobEndpoints.Map(app);
 SearchEndpoints.Map(app);
 KitEndpoints.Map(app);
 KitEndpoints.MapTracker(app);
+WebhookEndpoints.Map(app);
 ModelEndpoints.Map(app);
 SystemEndpoints.Map(app);
 

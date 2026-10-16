@@ -287,10 +287,14 @@ public sealed class JobSearchService
         // would blank the last_verified_at of every posting the moment a check failed — which is
         // exactly backwards, since a failed check is the moment you most want to see when the last
         // good answer was.
+        //
+        // status_changed_at moves whenever the verdict changes, including to "closed". The digest
+        // needs to know a role closed since yesterday even though no successful check happened.
         var updated = Db.Execute(conn,
             "UPDATE jobs SET status = @status, last_verified_at = COALESCE(@lv, last_verified_at), " +
-            "deadline_at = COALESCE(@dl, deadline_at) WHERE id = @id",
-            Db.P("@id", jobId), Db.P("@lv", lastVerifiedAt), Db.P("@dl", deadlineAt), Db.P("@status", status));
+            "deadline_at = COALESCE(@dl, deadline_at), status_changed_at = @sc WHERE id = @id",
+            Db.P("@id", jobId), Db.P("@lv", lastVerifiedAt), Db.P("@dl", deadlineAt),
+            Db.P("@sc", Now()), Db.P("@status", status));
 
         if (updated == 0) throw new KeyNotFoundException($"No job called '{jobId}'.");
         return GetJob(jobId)!;

@@ -798,6 +798,72 @@ export interface ModelUsage {
   }[];
 }
 
+// ---- Webhooks --------------------------------------------------------------
+
+/** What the daily digest counts. Empty on the wire means both. */
+export type WebhookEvent = 'new_jobs' | 'verification_changed';
+
+export interface Webhook {
+  id: string;
+  label: string;
+  url: string;
+  enabled: boolean;
+  /** @roles the message addresses. Names, not accounts: this app has no users. */
+  mentions: string[];
+  /** The name the digest is reported under, e.g. "userx". */
+  senderName: string;
+  events: WebhookEvent[];
+  urgentDays: number;
+  /** When the last digest went out. Everything is counted "since" this. */
+  lastSentAt?: string;
+  createdAt: string;
+}
+
+export interface WebhookDraft {
+  id?: string;
+  label?: string;
+  url: string;
+  enabled?: boolean;
+  mentions?: string[];
+  senderName?: string;
+  events?: WebhookEvent[];
+  urgentDays?: number;
+}
+
+/** The digest that would be sent right now, without sending it. */
+export interface WebhookPreview {
+  message: string;
+  newCount: number;
+  urgentCount: number;
+  changedCount: number;
+  since: string;
+  items: WebhookItem[];
+}
+
+export interface WebhookItem {
+  title: string;
+  company: string;
+  url: string;
+  verdict: string;
+  deadline?: string;
+  urgent: boolean;
+  why: string;
+}
+
+export interface WebhookSendResult {
+  ok: boolean;
+  message: string;
+  status: number;
+  detail: string;
+  responseBody: string;
+}
+
+export interface WebhookSendAllResult {
+  sent: number;
+  total: number;
+  results: WebhookSendResult[];
+}
+
 // ---- Polling for long operations -------------------------------------------
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

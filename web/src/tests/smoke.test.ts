@@ -4,8 +4,8 @@ import { hasApiKey, setApiKey, ApiError, waitForOp, type OpStatus } from '../lib
 
 describe('route table', () => {
   it('covers every screen the brief asks for', () => {
-    expect(routes.map((r) => r.title)).toEqual(['Resume', 'Profile', 'Jobs', 'Search', 'Kits', 'Tracker', 'Models']);
-    expect(routes.map((r) => r.path)).toEqual(['/', '/profile', '/jobs', '/search', '/kits', '/tracker', '/models']);
+    expect(routes.map((r) => r.title)).toEqual(['Resume', 'Profile', 'Jobs', 'Search', 'Kits', 'Tracker', 'Models', 'Settings']);
+    expect(routes.map((r) => r.path)).toEqual(['/', '/profile', '/jobs', '/search', '/kits', '/tracker', '/models', '/settings']);
   });
 
   it('lazily loads every screen', () => {

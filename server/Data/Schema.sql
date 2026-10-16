@@ -122,6 +122,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   -- is stored rather than rounded up to open: a 403 or a wrong-company redirect confirmed nothing,
   -- and a tracker that calls those live is the false confidence this whole column set removes.
   status        TEXT NOT NULL DEFAULT '',
+  -- When the status VALUE last changed, which is not the same as last_verified_at: that one only
+  -- moves on a confirmed open, deliberately. The daily digest needs to report what changed since
+  -- the last run, and a column that only tracks successes cannot answer that.
+  status_changed_at TEXT,
   created_at    TEXT NOT NULL,
   UNIQUE(url, title, company)
 );
@@ -284,6 +288,35 @@ CREATE TABLE IF NOT EXISTS job_requirements (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_requirements_job ON job_requirements(job_id, class, met);
+
+-- Outbound notifications.
+--
+-- A digest, not a stream: the tool runs once a day and sends one line saying how many prospects
+-- turned up and how many need a decision, addressed to @roles. Per-posting webhooks on a board
+-- sweep produce hundreds of messages and get muted, which is the same as having none.
+--
+-- The payload carries job titles, companies and URLs and nothing else. No resume text, no profile
+-- facts, no tracker notes. That is what keeps "your resume never leaves this machine" literally
+-- true even when a webhook is configured, and it is enforced by a test rather than by convention.
+CREATE TABLE IF NOT EXISTS webhooks (
+  id            TEXT PRIMARY KEY,
+  label         TEXT NOT NULL DEFAULT '',
+  url           TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  -- @roles to address, e.g. ["jobseekers", "dataeng"]. Names, not accounts: this app has no users.
+  mentions      TEXT NOT NULL DEFAULT '[]',
+  -- The name the digest is reported under, e.g. "userx". Optional; the message reads fine without it.
+  sender_name   TEXT NOT NULL DEFAULT '',
+  -- new_jobs | verification_changed. Empty means both.
+  events        TEXT NOT NULL DEFAULT '[]',
+  -- A deadline inside this many days counts as needing action.
+  urgent_days   INTEGER NOT NULL DEFAULT 7,
+  -- The digest cursor. Counts are "since the last one sent", which is what makes a daily job
+  -- meaningful; without it every run would repeat everything ever found.
+  last_sent_at  TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
 
 -- Terms you use that the built-in keyword dictionary does not know about. Approved rows join the
 -- dictionary at match time. Kept in a table rather than edited into the C# array on purpose: a

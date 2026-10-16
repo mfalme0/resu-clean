@@ -15,7 +15,8 @@
     | 'external'
     | 'plus'
     | 'trash'
-    | 'chart' = 'doc';
+    | 'chart'
+    | 'bell' = 'doc';
   export let size = 24;
 </script>
 
@@ -61,5 +62,7 @@
     <path d="M4 7h16" /><path d="M9 7V4h6v3" /><path d="M6 7l1 13h10l1-13" />
   {:else if name === 'chart'}
     <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+  {:else if name === 'bell'}
+    <path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6z" /><path d="M10 19a2 2 0 0 0 4 0" />
   {/if}
 </svg>

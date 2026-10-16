@@ -595,6 +595,61 @@ public sealed record PositionImportResultDto(
     IReadOnlyList<string> Skipped,
     IReadOnlyList<string> Warnings);
 
+// ---- Webhooks ----------------------------------------------------------------
+
+public sealed record WebhookDto(
+    string Id,
+    string Label,
+    string Url,
+    bool Enabled,
+    IReadOnlyList<string> Mentions,
+    /// <summary>The name the digest is reported under. Optional.</summary>
+    string SenderName,
+    IReadOnlyList<string> Events,
+    int UrgentDays,
+    /// <summary>When the last digest was sent. Counts are "since" this.</summary>
+    string? LastSentAt,
+    string CreatedAt);
+
+public sealed record WebhookRequest
+{
+    public string? Id { get; init; }
+    public string? Label { get; init; }
+    public string? Url { get; init; }
+    public bool? Enabled { get; init; }
+    /// <summary>@roles to address. Names, not accounts.</summary>
+    public List<string>? Mentions { get; init; }
+    public string? SenderName { get; init; }
+    /// <summary>new_jobs | verification_changed. Empty means both.</summary>
+    public List<string>? Events { get; init; }
+    public int? UrgentDays { get; init; }
+}
+
+/// <summary>The message that would be sent, without sending it. The only safe way to configure one.</summary>
+public sealed record WebhookPreviewDto(
+    string Message,
+    int NewCount,
+    int UrgentCount,
+    int ChangedCount,
+    string Since,
+    IReadOnlyList<WebhookItemDto> Items);
+
+public sealed record WebhookItemDto(
+    string Title,
+    string Company,
+    string Url,
+    string Verdict,
+    string? Deadline,
+    bool Urgent,
+    string Why);
+
+public sealed record WebhookSendResultDto(
+    bool Ok,
+    string Message,
+    int Status,
+    string Detail,
+    string ResponseBody);
+
 // ---- Models / routing -------------------------------------------------------
 
 public sealed record ProviderDto(

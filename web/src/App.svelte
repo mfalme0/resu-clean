@@ -28,14 +28,15 @@
   let edition = '';
   let current: Theme = 'newsprint';
 
-  const navIcons: Record<string, 'doc' | 'book' | 'search' | 'compass' | 'mail' | 'list' | 'gear'> = {
+  const navIcons: Record<string, 'doc' | 'book' | 'search' | 'compass' | 'mail' | 'list' | 'gear' | 'bell'> = {
     '/': 'doc',
     '/profile': 'book',
     '/jobs': 'search',
     '/search': 'compass',
     '/kits': 'mail',
     '/tracker': 'list',
-    '/models': 'gear'
+    '/models': 'gear',
+    '/settings': 'bell'
   };
 
   async function render(target: string) {
