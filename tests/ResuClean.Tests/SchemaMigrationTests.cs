@@ -251,6 +251,65 @@ public class SchemaMigrationTests : IDisposable
         Assert.Contains("kubernetes", posting);
     }
 
+    [Fact]
+    public void The_webhooks_table_is_added_to_an_existing_database()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        using var conn = host.Db.Open();
+        Assert.NotNull(Db.Scalar(conn,
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'webhooks'"));
+
+        // The column checked directly rather than inferred from some query that happens to work.
+        // jobs.status_changed_at did not exist when the legacy schema was written, and the digest
+        // selects it by name, so a missing migration surfaces as "no such column" at send time --
+        // which is exactly how this shipped once during development.
+        var columns = Db.Query(conn, "PRAGMA table_info(jobs)", r => Db.Str(r, "name"));
+        Assert.Contains("status_changed_at", columns);
+    }
+
+    [Fact]
+    public void A_digest_can_be_built_on_a_database_that_predates_webhooks()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+        var hooks = new Services.WebhookService(
+            host.Db, new TestHttpFactory(), new NoopLogger<Services.WebhookService>());
+        var hook = hooks.Save(new Models.WebhookRequest { Url = "https://hooks.example/x", SenderName = "userx" });
+
+        // Through the real digest builder, on a database that never had the column. If the
+        // migration were missing this throws rather than quietly reporting no prospects.
+        var digest = hooks.BuildDigest(hook);
+
+        Assert.Contains("userx", digest.Message);
+        // Zero, and that is the correct answer rather than a symptom: the posting in the legacy
+        // database was saved in January, so it is not news inside the default one-day window. The
+        // point of this test is that the builder runs at all.
+        Assert.Equal(0, digest.NewCount);
+        Assert.Equal(0, digest.Changed.Count);
+    }
+
+    [Fact]
+    public void Verifying_a_posting_saved_before_the_upgrade_still_records_when_the_verdict_changed()
+    {
+        SeedLegacyDatabase();
+        using var host = Boot();
+
+        // The write path for the new column. A migration that adds a column but never populates it
+        // would leave every upgraded user with a digest that never reports a closing.
+        host.Jobs.UpdateVerification("job_1", DateTime.UtcNow.ToString("O"), null, "closed");
+
+        using var conn = host.Db.Open();
+        var stamp = Db.Scalar(conn, "SELECT status_changed_at FROM jobs WHERE id = @id", Db.P("@id", "job_1"));
+        Assert.False(string.IsNullOrWhiteSpace(stamp as string));
+
+        var hooks = new Services.WebhookService(
+            host.Db, new TestHttpFactory(), new NoopLogger<Services.WebhookService>());
+        var hook = hooks.Save(new Models.WebhookRequest { Url = "https://hooks.example/x", SenderName = "userx" });
+        Assert.Single(hooks.BuildDigest(hook).Changed);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
