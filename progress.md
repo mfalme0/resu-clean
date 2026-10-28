@@ -118,10 +118,6 @@ fetched — so there is no fetchable host to judge. That is the honest answer.
 
 ## Not started
 
-- **Skill dictionary seeding (your 3.2) — operational, yours, ten minutes.** Proxmox, TrueNAS,
-  Business Central, Power Automate and Grafana are all absent from the built-in list and all
-  genuinely yours. Until approved, scoring surfaces "HVAC" as missing and ignores real skills.
-  Profile → Scoring dictionary → Find tools I keep using.
 - **ARM64 — deliberately untouched, and the best contribution point.** Add the RID to `RIDS`
   in `scripts/publish.mjs`, run it on the hardware, report what breaks. It needs real hardware,
   so I left it rather than ship untested binaries.
