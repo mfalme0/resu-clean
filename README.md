@@ -52,6 +52,7 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Per-company cover letter tone](#per-company-cover-letter-tone)
 - [Application analytics](#application-analytics)
 - [Interview rehearsal](#interview-rehearsal)
+- [Encrypted data export / import](#encrypted-data-export--import)
 - [What's left for v2](#whats-left-for-v2)
 
 ---
@@ -845,6 +846,24 @@ Rehearse → (the Rehearsal screen, opened from a saved job) shows the questions
 
 ---
 
+## Encrypted data export / import
+
+Your whole data directory — the SQLite database, verified profile, saved jobs, kits, resume files,
+and stored API keys — can be packed into a single encrypted `.resubak` file (Backup screen). The
+file is encrypted with AES-256 using a key derived from a password you choose; without that password
+nothing inside can be read. Use it to back up to a USB stick, move to a second machine, or archive
+before reinstalling.
+
+On Windows, stored API keys use DPAPI bound to your user account, so a backup restored on a
+different Windows account or machine will need those keys re-entered. On macOS and Linux the
+`machine.key` travels with the backup, so the same machine can decrypt them. Either way the backup
+file itself is unreadable without the export password.
+
+The export covers: `resu-clean.db`, `machine.key` (non-Windows), `kits/`, `documents/`, `uploads/`.
+Your `.env` file is not included — set it up again on any machine you restore to.
+
+---
+
 ## What's left for v2
 
 > **Want to help?** The one gap I could not close from this machine is **ARM64 support**. The
@@ -853,17 +872,9 @@ Rehearse → (the Rehearsal screen, opened from a saved job) shows the questions
 > RID to `RIDS` in `scripts/publish.mjs`, confirm the app runs on the hardware, and report what
 > breaks. I left it out rather than ship binaries I could not test. Open an issue or a PR.
 
-- Application analytics: response rates per source, so you can see which boards actually work for you.
-  (The rewrite ledger already counts model accept rates; board response rates are the same idea
-  applied to your tracker, and the tracker already carries the timestamps it needs)
-- Interview prep that rehearses: the questions are generated and grounded, but nothing times you
-  against them or checks your answer against the verified profile
 - Import from LinkedIn/Indeed via manual paste with better structuring
 - Multiple resume variants auto-tagged by seniority and role family
 - A `--watch` daemon mode that polls enabled feeds on a schedule and diffs for new postings
-- Encrypted-at-rest export/import of the whole data directory, for backup and machine moves. The
-  tracker can already be exported and re-imported as plain JSON; the resumes and the encrypted keys
-  cannot yet leave the machine
 - iCalendar export for interview stages
 - Optional Windows/macOS launcher (Tauri shell) around the existing executable
 

@@ -46,6 +46,8 @@ Two invariants hold the thing up:
 | `d9d67c3` | Phase-5 features wired end to end. Job quality, requirements, gap ramps, interview prep, rewrite gate + ledger, skill dictionary, tracker transfer, web search. Plus three failing-test fixes: staleness computed in local time (520-day posting read 519), eligibility missing "authorised", quotes returning matched words instead of the sentence. |
 | `1eb1817` | Add missing skill dictionary terms: Proxmox, TrueNAS, Business Central, Power Automate, Grafana. Updates tests to use Synology/QNAP as test tools instead of now-built-in Proxmox/TrueNAS. |
 | `ec4b988` | Per-company cover letter tone preference (local-only). GET/POST /api/jobs/{id}/tone stores a free-form tone per company in the settings table; the tone is read when drafting a cover letter and passed as context to the model. Stored locally, never transmitted. |
+| `7101c61` | Application analytics dashboard and interview rehearsal mode (local-only). GET /api/analytics/{summary|by-source|monthly|funnel}; interview questions per job with figure-grounding against the verified profile. |
+| `7101c61` | Encrypted full-data export/import (local-only). POST /api/data/{export|preview|import} creates/restores an AES-256 encrypted .resubak of the whole data directory, with the user's password as the only key. |
 | `f2870b5` | `api` matched inside `capital`, so a finance CV satisfied "Strong API design". One boundary-aware matcher in `Keywords.ContainsTerm`, used by three scorers. |
 | `213b6e5` | Migration test booting the real services against a pre-phase-5 database. |
 | `969e8a4` | Verification and deadlines (Priority 1). |
@@ -126,7 +128,7 @@ fetched — so there is no fetchable host to judge. That is the honest answer.
 
 ## Still on the v2 list (scope, not bugs)
 
-Resume variants auto-tagged by seniority · `--watch` daemon · encrypted export of the whole data dir · iCalendar export · Tauri launcher.
+Resume variants auto-tagged by seniority · `--watch` daemon · iCalendar export · Tauri launcher.
 
 ---
 

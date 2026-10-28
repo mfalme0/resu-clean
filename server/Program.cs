@@ -58,6 +58,7 @@ builder.Services.AddSingleton(provider => new PositionImport(
     provider.GetRequiredService<Db>(), provider.GetRequiredService<JobSearchService>()));
 builder.Services.AddSingleton<ResumeWorkflows>();
 builder.Services.AddSingleton<OpRunner>();
+builder.Services.AddSingleton<DataExportService>();
 builder.Services.AddSingleton<ApplicationAnalyticsService>();
 builder.Services.AddSingleton<InterviewRehearsalService>();
 builder.Services.AddSingleton<ResuClean.Services.Search.WebSearchService>();
@@ -182,6 +183,7 @@ SearchEndpoints.Map(app);
 KitEndpoints.Map(app);
 KitEndpoints.MapTracker(app);
 WebhookEndpoints.Map(app);
+DataEndpoints.Map(app);
 AnalyticsEndpoints.Map(app);
 ModelEndpoints.Map(app);
 SystemEndpoints.Map(app);

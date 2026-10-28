@@ -37,6 +37,7 @@
     '/tracker': 'list',
     '/analytics': 'doc',
     '/rehearsal': 'doc',
+    '/backup': 'mail',
     '/models': 'gear',
     '/settings': 'bell'
   };

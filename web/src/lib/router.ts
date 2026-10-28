@@ -18,6 +18,7 @@ export const routes: RouteDef[] = [
   { path: '/tracker', title: 'Tracker', load: () => import('../routes/Tracker.svelte') },
   { path: '/analytics', title: 'Analytics', load: () => import('../routes/Analytics.svelte') },
   { path: '/rehearsal', title: 'Rehearse', load: () => import('../routes/Rehearsal.svelte') },
+  { path: '/backup', title: 'Backup', load: () => import('../routes/Backup.svelte') },
   { path: '/models', title: 'Models', load: () => import('../routes/Models.svelte') },
   { path: '/settings', title: 'Settings', load: () => import('../routes/Settings.svelte') }
 ];

@@ -962,3 +962,25 @@ export interface AnalyticsFunnelRow {
   count: number;
   conversionPct: number;
 }
+
+// ---- Data export / import ----------------------------------------------------
+
+export interface ExportResult {
+  fileName: string;
+  bytes: number;
+  filesIncluded: number;
+}
+
+export interface PreviewResult {
+  files: number;
+  totalBytes: number;
+  databasePath?: string;
+  machineKeyPath?: string;
+  looksValid: boolean;
+}
+
+export interface ImportResult {
+  filesRestored: number;
+  bytesRestored: number;
+  databaseReplaced: boolean;
+}
