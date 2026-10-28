@@ -250,6 +250,38 @@ public static class JobEndpoints
                 }
                 return Task.FromResult(Api.Ok(new CoverLetterToneDto(job.Company, body.Tone ?? "")));
             }));
+
+        // ---- Interview rehearsal ---------------------------------------------
+
+        /// <summary>
+        /// Gets the rehearsal questions for this job, plus any answers already given.
+        /// </summary>
+        group.MapGet("/{id}/rehearsal", (string id, string? versionId, InterviewRehearsalService rehearsal) =>
+            Api.Guard(async () =>
+            {
+                var state = await rehearsal.GetOrCreate(id, versionId).ConfigureAwait(false);
+                return Api.Ok(new RehearsalDto(
+                    state.Questions.Select(q => new RehearsalQuestionDto(q.Question, q.Probes, q.GroundedIn, q.Risk, q.RiskNote)).ToList(),
+                    state.Answers.Select(a => new RehearsalAnswerRow(a.Id, a.Question, a.Answer, a.Grounded, a.Feedback, a.CreatedAt)).ToList(),
+                    state.UsedModel, state.Method));
+            }));
+
+        /// <summary>
+        /// Submits an answer to one rehearsal question and returns whether its figures are
+        /// backed by the verified profile.
+        /// </summary>
+        group.MapPost("/{id}/rehearsal/answer", (string id, RehearsalAnswerRequest body, InterviewRehearsalService rehearsal) =>
+            Api.Guard(() =>
+            {
+                if (string.IsNullOrWhiteSpace(body.Question))
+                    throw new ArgumentException("Name the question you are answering.");
+                if (string.IsNullOrWhiteSpace(body.Answer))
+                    throw new ArgumentException("Type an answer before submitting it.");
+
+                var result = rehearsal.Submit(id, body.Question, body.Answer);
+                return Task.FromResult(Api.Ok(new RehearsalAnswerDto(result.Id, result.Question, result.Answer,
+                    result.Grounded, result.Feedback, result.CreatedAt)));
+            }));
     }
 
     public sealed record VerifyJobRequest(string? Status, string? DeadlineAt);
@@ -278,3 +310,34 @@ public static class JobEndpoints
 
 public sealed record CoverLetterToneDto(string Company, string Tone);
 public sealed record SetCoverLetterToneRequest(string? Tone);
+
+public sealed record RehearsalDto(
+    List<RehearsalQuestionDto> Questions,
+    List<RehearsalAnswerRow> Answers,
+    bool UsedModel,
+    string Method);
+
+public sealed record RehearsalQuestionDto(
+    string Question,
+    string Probes,
+    string GroundedIn,
+    bool Risk,
+    string RiskNote);
+
+public sealed record RehearsalAnswerRow(
+    string Id,
+    string Question,
+    string Answer,
+    bool Grounded,
+    string Feedback,
+    string CreatedAt);
+
+public sealed record RehearsalAnswerRequest(string? Question, string? Answer);
+
+public sealed record RehearsalAnswerDto(
+    string Id,
+    string Question,
+    string Answer,
+    bool Grounded,
+    string Feedback,
+    string CreatedAt);

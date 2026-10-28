@@ -35,6 +35,8 @@
     '/search': 'compass',
     '/kits': 'mail',
     '/tracker': 'list',
+    '/analytics': 'doc',
+    '/rehearsal': 'doc',
     '/models': 'gear',
     '/settings': 'bell'
   };

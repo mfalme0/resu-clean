@@ -579,6 +579,32 @@ export interface InterviewPrep {
   notes: string[];
 }
 
+// ---- Interview rehearsal ------------------------------------------------------
+
+export interface RehearsalQuestion {
+  question: string;
+  probes: string;
+  groundedIn: string;
+  risk: boolean;
+  riskNote: string;
+}
+
+export interface RehearsalAnswerRow {
+  id: string;
+  question: string;
+  answer: string;
+  grounded: boolean;
+  feedback: string;
+  createdAt: string;
+}
+
+export interface RehearsalState {
+  questions: RehearsalQuestion[];
+  answers: RehearsalAnswerRow[];
+  usedModel: boolean;
+  method: string;
+}
+
 export interface SearchSummary {
   runId: string;
   query: string;
@@ -895,4 +921,44 @@ export async function waitForOp<T>(
     }
     await sleep(interval);
   }
+}
+
+// ---- Application analytics --------------------------------------------------
+
+export interface AnalyticsSummary {
+  totalApplications: number;
+  prepared: number;
+  sent: number;
+  replied: number;
+  interview: number;
+  rejected: number;
+  closed: number;
+  responseRatePct: number;
+  interviewRatePct: number;
+  rejectionRatePct: number;
+  avgDaysToFirstResponse: number;
+  withResponseTime: number;
+}
+
+export interface AnalyticsSourceRow {
+  sourceName: string;
+  total: number;
+  sent: number;
+  replied: number;
+  interview: number;
+  responseRatePct: number;
+}
+
+export interface AnalyticsMonthlyRow {
+  month: string;
+  applications: number;
+  sent: number;
+  replied: number;
+  interview: number;
+}
+
+export interface AnalyticsFunnelRow {
+  stage: string;
+  count: number;
+  conversionPct: number;
 }

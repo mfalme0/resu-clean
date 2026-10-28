@@ -330,3 +330,17 @@ CREATE TABLE IF NOT EXISTS skill_dictionary (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_skilldict_norm ON skill_dictionary(normalized);
+
+-- Interview rehearsal answers. One row per answer the user types while rehearsing questions for a
+-- posting. Grounded means every figure in the answer appears in the verified profile; ungrounded
+-- means something in the answer cannot be backed yet. Stored locally, never sent anywhere.
+CREATE TABLE IF NOT EXISTS rehearsal_answers (
+  id          TEXT PRIMARY KEY,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  question    TEXT NOT NULL,
+  answer      TEXT NOT NULL,
+  grounded    INTEGER NOT NULL DEFAULT 0,
+  feedback    TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_rehearsal_job ON rehearsal_answers(job_id, created_at DESC);

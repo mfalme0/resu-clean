@@ -49,6 +49,9 @@ else's posting has to quote that posting before it is allowed to raise a flag.
 - [Tests](#tests)
 - [Security note](#security-note)
 - [Troubleshooting](#troubleshooting)
+- [Per-company cover letter tone](#per-company-cover-letter-tone)
+- [Application analytics](#application-analytics)
+- [Interview rehearsal](#interview-rehearsal)
 - [What's left for v2](#whats-left-for-v2)
 
 ---
@@ -831,6 +834,14 @@ low-RAM mode.
 ## Per-company cover letter tone
 
 You can set a free-form tone preference for each company you apply to (Jobs → a saved job → cover letter tone). It is stored locally in the `settings` table, never sent anywhere, and is passed as context when a model drafts a cover letter for that company's postings. A blank tone clears the preference. This is all local — no third party is involved, and the tool does not transmit anything on your behalf.
+
+## Application analytics
+
+Analytics → (the Analytics screen) reads your tracker and shows response rates, time-to-first-response, per-source breakdowns, monthly trends and the funnel. Every number is computed from applications you have moved past "prepared" yourself — nothing is fetched, nothing is modelled, and nothing leaves this machine. It is there to tell you which boards are worth your afternoons and which are not.
+
+## Interview rehearsal
+
+Rehearse → (the Rehearsal screen, opened from a saved job) shows the questions a posting is likely to produce and lets you answer each one. Every figure you type — numbers, percentages, years — is checked against your verified profile. A figure that appears nowhere in your profile is flagged before you say it out loud, not after. Works with no model at all; the grounding check is deterministic. Like everything else here, nothing is transmitted anywhere.
 
 ---
 
