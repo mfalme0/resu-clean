@@ -33,6 +33,12 @@ public sealed class ApplicationService
     /// <summary>Server-side paths for a kit. Never serialised to the client.</summary>
     public sealed record KitFiles(string? Eml, string? Zip, string? EmailText, string? CoverPdf, string? CoverDocx);
 
+    /// <summary>Look up a free-form setting from the settings table.</summary>
+    private static string? GetSetting(SqliteConnection conn, string key)
+    {
+        return Db.QueryOne(conn, "SELECT value FROM settings WHERE key = @k", r => Db.Str(r, "value"), Db.P("@k", key))!;
+    }
+
     public async Task<(KitDto Kit, KitFiles Files)> CreateKitAsync(CreateKitRequest request, Configuration.AppConfig app, CancellationToken ct = default)
     {
         var job = _jobs.GetJob(request.JobId) ?? throw new KeyNotFoundException($"Job '{request.JobId}' does not exist.");
@@ -215,10 +221,20 @@ public sealed class ApplicationService
 
     private async Task<string> BuildCoverLetterAsync(JobDto job, string resumeText, string fullName, CancellationToken ct)
     {
+        using var conn = _db.Open();
+        var toneKey = $"cover_letter_tone:{job.Company?.ToLowerInvariant() ?? ""}";
+        var storedTone = GetSetting(conn, toneKey);
+
         var system = ModelRouter.SystemPrompt("apply_email", _profile.BuildReference());
+        var resumeClaimCtx = $"MY RESUME:\n<<<{Trim(resumeText, 6000)}>>>";
+        var toneCtx = string.IsNullOrWhiteSpace(storedTone)
+            ? ""
+            : $"COVER LETTER TONE PREFERENCE (from your settings): {storedTone}\n\n";
+
         var user =
             $"Write a short cover letter for this role, 200 words maximum. Plain text, no placeholders, every claim from my resume.\n\n" +
-            $"ROLE: {job.Title}\nCOMPANY: {job.Company}\n\nMY RESUME:\n<<<{Trim(resumeText, 6000)}>>>";
+            $"ROLE: {job.Title}\nCOMPANY: {job.Company}\n\n" +
+            $"{toneCtx}{resumeClaimCtx}";
         var routed = await _router.RunAsync("apply_email", system, user, ct).ConfigureAwait(false);
         if (routed.UsedModel && !string.IsNullOrWhiteSpace(routed.Text) && !ContainsPlaceholder(routed.Text))
             return routed.Text.Trim();

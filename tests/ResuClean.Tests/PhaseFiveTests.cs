@@ -12,9 +12,9 @@ public class SkillDictionaryTests
 {
     private const string ResumeWithTools = """
         EXPERIENCE
-        - Ran Proxmox and TrueNAS at home for three years.
-        - Backed everything onto a Proxmox cluster and a TrueNAS share.
-        - Migrated the Proxmox host and rebuilt the TrueNAS pool.
+        - Ran Synology and QNAP at home for three years.
+        - Backed everything onto a Synology cluster and a QNAP share.
+        - Migrated the Synology host and rebuilt the QNAP pool.
         """;
 
     [Fact]
@@ -43,7 +43,7 @@ public class SkillDictionaryTests
 
         var queued = host.Dictionary.ProposeAsync();
 
-        Assert.Contains(queued, q => q.Text.Contains("Proxmox", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(queued, q => q.Text.Contains("Synology", StringComparison.OrdinalIgnoreCase));
         // Proposed, not applied: the dictionary is still untouched.
         Assert.Empty(host.Dictionary.List());
         Assert.Empty(Keywords.ExtraSkills);
@@ -56,14 +56,14 @@ public class SkillDictionaryTests
         host.Store.Create("Test", ResumeWithTools, "paste");
         host.Dictionary.ProposeAsync();
 
-        var pending = Assert.Single(host.Profile.ListPending(), p => p.Text.Contains("Proxmox", StringComparison.OrdinalIgnoreCase));
+        var pending = Assert.Single(host.Profile.ListPending(), p => p.Text.Contains("Synology", StringComparison.OrdinalIgnoreCase));
 
         // This is the endpoint's coordination rule: a dictionary approval does both jobs.
         var fact = host.Profile.ApproveFact(pending.Id);
         host.Dictionary.Add(pending.Text, origin: "dictionary");
 
-        Assert.Contains(host.Dictionary.List(), t => t.Term.Contains("Proxmox", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(Keywords.ExtraSkills, t => t.Contains("proxmox", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(host.Dictionary.List(), t => t.Term.Contains("Synology", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(Keywords.ExtraSkills, t => t.Contains("synology", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(fact);
     }
 
@@ -71,17 +71,17 @@ public class SkillDictionaryTests
     public void An_approved_term_changes_keyword_coverage()
     {
         using var host = new TestHost();
-        const string jd = "We run Proxmox and TrueNAS for virtualisation.";
+        const string jd = "We run Synology and QNAP for virtualisation.";
 
         var before = Keywords.Compare("- Some unrelated experience.", jd);
 
-        host.Dictionary.Add("Proxmox");
-        host.Dictionary.Add("TrueNAS");
+        host.Dictionary.Add("Synology");
+        host.Dictionary.Add("QNAP");
 
-        var after = Keywords.Compare("- Ran Proxmox and TrueNAS in a home lab.", jd);
+        var after = Keywords.Compare("- Ran Synology and QNAP in a home lab.", jd);
 
-        Assert.Contains("proxmox", before.Missing);
-        Assert.Contains("proxmox", after.Matched);
+        Assert.Contains("synology", before.Missing);
+        Assert.Contains("synology", after.Matched);
         Assert.True(after.MatchPct > before.MatchPct);
     }
 
@@ -97,11 +97,11 @@ public class SkillDictionaryTests
     public void Removing_a_term_takes_it_out_of_the_live_dictionary()
     {
         using var host = new TestHost();
-        var term = host.Dictionary.Add("Proxmox");
-        Assert.Contains("proxmox", Keywords.ExtraSkills);
+        var term = host.Dictionary.Add("Synology");
+        Assert.Contains("synology", Keywords.ExtraSkills);
 
         host.Dictionary.Remove(term.Id);
-        Assert.DoesNotContain("proxmox", Keywords.ExtraSkills);
+        Assert.DoesNotContain("synology", Keywords.ExtraSkills);
     }
 
     [Fact]

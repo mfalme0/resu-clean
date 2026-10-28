@@ -1,4 +1,7 @@
+using Microsoft.Data.Sqlite;
 using ResuClean;
+using ResuClean.Configuration;
+using ResuClean.Data;
 using ResuClean.Models;
 using ResuClean.Services;
 using ResuClean.Services.Sources;
@@ -198,6 +201,55 @@ public static class JobEndpoints
                 return Task.FromResult(Api.Ok(new JobVerificationDto(
                     verified.Id, verified.Status, verified.LastVerifiedAt, verified.DeadlineAt, verified.EffectiveStatus)));
             }));
+
+        // ---- Per-company cover letter tone -------------------------------------
+
+        /// <summary>
+        /// Gets the stored cover-letter tone preference for this company, if any. Stored locally,
+        /// never sent anywhere. Used when drafting a cover letter for this company's postings.
+        /// </summary>
+        group.MapGet("/{id}/tone", (string id, JobSearchService jobs, Db db) =>
+            Api.Guard(() =>
+            {
+                var job = jobs.GetJob(id) ?? throw new KeyNotFoundException($"No job called '{id}'.");
+                if (string.IsNullOrWhiteSpace(job.Company))
+                    return Task.FromResult(Api.Ok(new CoverLetterToneDto("", "")));
+
+                using var conn = db.Open();
+                var tone = GetSetting(conn, $"cover_letter_tone:{job.Company.ToLowerInvariant()}");
+                return Task.FromResult(Api.Ok(new CoverLetterToneDto(job.Company, tone ?? "")));
+            }));
+
+        /// <summary>
+        /// Sets the cover-letter tone preference for this company. Stored locally, never sent
+        /// anywhere. A blank tone clears the preference.
+        /// </summary>
+        group.MapPost("/{id}/tone", (string id, SetCoverLetterToneRequest body, JobSearchService jobs, Db db) =>
+            Api.Guard(() =>
+            {
+                var job = jobs.GetJob(id) ?? throw new KeyNotFoundException($"No job called '{id}'.");
+                if (string.IsNullOrWhiteSpace(job.Company))
+                    throw new ArgumentException("This job has no company to store a tone against.");
+
+                var key = $"cover_letter_tone:{job.Company.ToLowerInvariant()}";
+                using var conn = db.Open();
+                var existing = Db.QueryOne(conn, "SELECT id FROM settings WHERE key = @k", r => Db.Str(r, "id"),
+                    Db.P("@k", key));
+                var now = DateTime.UtcNow.ToString("O");
+                if (existing is null)
+                {
+                    Db.Exec(conn,
+                        "INSERT INTO settings (key, value) VALUES (@k,@v)",
+                        Db.P("@k", key), Db.P("@v", body.Tone ?? ""));
+                }
+                else
+                {
+                    Db.Exec(conn,
+                        "UPDATE settings SET value = @v WHERE key = @k",
+                        Db.P("@v", body.Tone ?? ""), Db.P("@k", key));
+                }
+                return Task.FromResult(Api.Ok(new CoverLetterToneDto(job.Company, body.Tone ?? "")));
+            }));
     }
 
     public sealed record VerifyJobRequest(string? Status, string? DeadlineAt);
@@ -217,4 +269,12 @@ public static class JobEndpoints
         report.UsedModel,
         report.Model,
         report.Method);
-}
+
+    private static string? GetSetting(SqliteConnection conn, string key)
+    {
+        return Db.QueryOne(conn, "SELECT value FROM settings WHERE key = @k", r => Db.Str(r, "value"), Db.P("@k", key))!;
+    }
+    }
+
+public sealed record CoverLetterToneDto(string Company, string Tone);
+public sealed record SetCoverLetterToneRequest(string? Tone);

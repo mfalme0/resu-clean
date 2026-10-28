@@ -828,6 +828,12 @@ rendered from it. If the source has odd spacing, clean it first.
 **Everything is slow** — you are probably on `npm run dev` (watchers + HMR). `npm start` is the
 low-RAM mode.
 
+## Per-company cover letter tone
+
+You can set a free-form tone preference for each company you apply to (Jobs → a saved job → cover letter tone). It is stored locally in the `settings` table, never sent anywhere, and is passed as context when a model drafts a cover letter for that company's postings. A blank tone clears the preference. This is all local — no third party is involved, and the tool does not transmit anything on your behalf.
+
+---
+
 ## What's left for v2
 
 > **Want to help?** The one gap I could not close from this machine is **ARM64 support**. The
@@ -836,7 +842,6 @@ low-RAM mode.
 > RID to `RIDS` in `scripts/publish.mjs`, confirm the app runs on the hardware, and report what
 > breaks. I left it out rather than ship binaries I could not test. Open an issue or a PR.
 
-- Cover letter and email tone as first-class, per-company preferences rather than one global note
 - Application analytics: response rates per source, so you can see which boards actually work for you.
   (The rewrite ledger already counts model accept rates; board response rates are the same idea
   applied to your tracker, and the tracker already carries the timestamps it needs)
